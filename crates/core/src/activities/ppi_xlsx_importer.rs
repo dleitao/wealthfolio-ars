@@ -209,12 +209,18 @@ fn parse_ppi_row(
         quote_ccy: None,
         instrument_type,
         quote_mode: None,
-        errors: None,
+        errors: if activity_type == "UNKNOWN" {
+            let mut m = std::collections::HashMap::new();
+            m.insert("activityType".to_string(), vec![format!("Tipo de movimiento no reconocido: '{}'", desc)]);
+            Some(m)
+        } else {
+            None
+        },
         warnings: None,
         duplicate_of_id: None,
         duplicate_of_line_number: None,
         is_draft: true,
-        is_valid: true,
+        is_valid: activity_type != "UNKNOWN",
         line_number: Some(line as i32),
         fx_rate: None,
         subtype: None,
@@ -498,5 +504,18 @@ mod tests {
         assert_eq!(parse_decimal("1234.56"),  Some(Decimal::from_str("1234.56").unwrap()));
         assert_eq!(parse_decimal("0"),        Some(Decimal::ZERO));
         assert_eq!(parse_decimal(""),         None);
+    }
+
+    #[test]
+    fn unknown_activity_marked_invalid_with_error() {
+        let sheets = vec![sheet("Pesos", vec![
+            vec!["Fecha", "Descripción", "Cantidad", "Precio", "Importe", "Saldo", "Moneda"],
+            vec!["15/05/2026", "Movimiento Desconocido / ALGO", "0", "0", "100", "100", "Pesos"],
+        ])];
+        let (activities, errors) = parse_ppi_xlsx(&sheets, None);
+        assert!(errors.is_empty(), "parse errors should be empty: {:?}", errors);
+        assert_eq!(activities.len(), 1);
+        assert!(!activities[0].is_valid, "UNKNOWN activity must be invalid");
+        assert!(activities[0].errors.is_some(), "UNKNOWN activity must have errors");
     }
 }

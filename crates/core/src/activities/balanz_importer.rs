@@ -130,6 +130,7 @@ fn parse_balanz_row(
         None
     };
 
+    let is_unknown = activity_type == "UNKNOWN";
     Ok(Some(ActivityImport {
         id: None,
         date,
@@ -148,12 +149,18 @@ fn parse_balanz_row(
         quote_ccy,
         instrument_type,
         quote_mode: None,
-        errors: None,
+        errors: if is_unknown {
+            let mut m = std::collections::HashMap::new();
+            m.insert("activityType".to_string(), vec![format!("Tipo de movimiento no reconocido: '{}'", desc)]);
+            Some(m)
+        } else {
+            None
+        },
         warnings: None,
         duplicate_of_id: None,
         duplicate_of_line_number: None,
         is_draft: true,
-        is_valid: true,
+        is_valid: !is_unknown,
         line_number: Some(line as i32),
         fx_rate: None,
         subtype: None,
@@ -345,5 +352,18 @@ mod tests {
         assert_eq!(parse_decimal("1234.56"),  Some(Decimal::from_str("1234.56").unwrap()));
         assert_eq!(parse_decimal("0"),        Some(Decimal::ZERO));
         assert_eq!(parse_decimal(""),         None);
+    }
+
+    #[test]
+    fn unknown_activity_marked_invalid_with_error() {
+        let rows = vec![
+            row("header", "Ticker", "Tipo de Instrumento", "Moneda", "Cantidad", "Precio", "Importe"),
+            row("Tipo de movimiento completamente nuevo", "XYZ", "Acciones", "Pesos", "10", "100", "1000"),
+        ];
+        let (activities, errors) = parse_balanz(&rows, None);
+        assert!(errors.is_empty(), "parse errors should be empty: {:?}", errors);
+        assert_eq!(activities.len(), 1);
+        assert!(!activities[0].is_valid, "UNKNOWN activity must be invalid");
+        assert!(activities[0].errors.is_some(), "UNKNOWN activity must have errors");
     }
 }
