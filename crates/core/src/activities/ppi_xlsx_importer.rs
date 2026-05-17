@@ -336,7 +336,12 @@ fn parse_ppi_date(s: &str) -> Option<String> {
 }
 
 fn parse_decimal(s: &str) -> Option<Decimal> {
-    let s = s.trim().replace(',', ".");
+    let s = s.trim();
+    let s = if s.contains('.') && s.contains(',') {
+        s.replace('.', "").replace(',', ".")
+    } else {
+        s.replace(',', ".")
+    };
     Decimal::from_str(&s).ok()
 }
 
@@ -484,5 +489,14 @@ mod tests {
         assert_eq!(sells.len(), 1, "duplicate SELL from Instrumentos must be deduplicated");
         // The wallet version (with price) should survive
         assert_eq!(sells[0].unit_price, Some(Decimal::from(25000)));
+    }
+
+    #[test]
+    fn parse_decimal_handles_european_thousands() {
+        assert_eq!(parse_decimal("1.234,56"), Some(Decimal::from_str("1234.56").unwrap()));
+        assert_eq!(parse_decimal("1234,56"),  Some(Decimal::from_str("1234.56").unwrap()));
+        assert_eq!(parse_decimal("1234.56"),  Some(Decimal::from_str("1234.56").unwrap()));
+        assert_eq!(parse_decimal("0"),        Some(Decimal::ZERO));
+        assert_eq!(parse_decimal(""),         None);
     }
 }
