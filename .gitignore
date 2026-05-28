@@ -88,6 +88,11 @@ Thumbs.db
 .ralph-tui/
 .kiro/
 .conductor/
+.continue/
+
+# Docs personales / contexto AI
+security-review.md
+wealthfolio-argentina-context.md
 db/
 apps/db/
 apps/tauri/db/
