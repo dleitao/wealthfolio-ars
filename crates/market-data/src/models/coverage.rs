@@ -130,6 +130,16 @@ impl Coverage {
         }
     }
 
+    /// Argentine exchanges (BYMA / BCBA), best-effort mode (accepts mic=None).
+    pub const fn argentina_only() -> Self {
+        Self {
+            equity_mic_allow: Some(&["XBUE"]),
+            equity_mic_deny: None,
+            allow_unknown_mic: true,
+            metal_quote_ccy_allow: None,
+        }
+    }
+
     /// Deutsche Boerse exchanges (Xetra + Frankfurt floor).
     /// Accepts mic=None so ISIN-only entries (no exchange set) can fall back to BF.
     pub const fn dach_exchanges() -> Self {

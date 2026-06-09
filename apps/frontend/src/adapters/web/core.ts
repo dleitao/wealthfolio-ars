@@ -153,6 +153,10 @@ export const COMMANDS: CommandMap = {
   set_secret: { method: "POST", path: "/secrets" },
   get_secret: { method: "GET", path: "/secrets" },
   delete_secret: { method: "DELETE", path: "/secrets" },
+  sync_ppi_data: { method: "POST", path: "/ppi/sync" },
+  sync_inflation_data: { method: "POST", path: "/argentina/inflation/sync" },
+  get_inflation_data: { method: "GET", path: "/argentina/inflation" },
+  sync_argentina_sectors: { method: "POST", path: "/argentina/sectors/sync" },
   // Taxonomies
   get_taxonomies: { method: "GET", path: "/taxonomies" },
   get_taxonomy: { method: "GET", path: "/taxonomies" },
@@ -1258,6 +1262,15 @@ export const invoke = async <T>(command: string, payload?: Record<string, unknow
     case "restore_sync_session":
     case "list_broker_connections":
     case "list_broker_accounts":
+    case "sync_ppi_data": {
+      const { startDate, endDate } = (payload ?? {}) as { startDate?: string; endDate?: string };
+      const qs = new URLSearchParams();
+      if (startDate) qs.set("start_date", startDate);
+      if (endDate) qs.set("end_date", endDate);
+      const qstr = qs.toString();
+      if (qstr) url += `?${qstr}`;
+      break;
+    }
     case "sync_broker_data":
     case "broker_ingest_run":
     case "sync_broker_connections":

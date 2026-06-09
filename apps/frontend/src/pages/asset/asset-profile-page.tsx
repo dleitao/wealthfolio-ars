@@ -3,6 +3,7 @@ import { ActionPalette, type ActionPaletteGroup } from "@/components/action-pale
 import { TickerAvatar } from "@/components/ticker-avatar";
 import { useHapticFeedback } from "@/hooks";
 import { useAlternativeAssetHolding, useAlternativeHoldings } from "@/hooks/use-alternative-assets";
+import { useCurrencyConversion } from "@/hooks/use-currency-conversion";
 import { useIsMobileViewport } from "@/hooks/use-platform";
 import { useQuoteHistory } from "@/hooks/use-quote-history";
 import { useSyncMarketDataMutation } from "@/hooks/use-sync-market-data";
@@ -114,6 +115,7 @@ type AssetTab = "overview" | "lots" | "history";
 export const AssetProfilePage = () => {
   const { settings } = useSettingsContext();
   const baseCurrency = settings?.baseCurrency ?? "USD";
+  const { convert, displayCurrencyCode } = useCurrencyConversion();
   const { assetId: encodedAssetId = "" } = useParams<{ assetId: string }>();
   const assetId = decodeURIComponent(encodedAssetId);
   const location = useLocation();
@@ -452,6 +454,9 @@ export const AssetProfilePage = () => {
   const symbolHolding = useMemo((): AssetDetailData | null => {
     if (!holding) return null;
 
+    const localCurrency = holding.localCurrency ?? holding.instrument?.currency ?? baseCurrency;
+    const cv = (v: number) => convert(v, localCurrency) ?? v;
+
     const averageCostPrice =
       holding.costBasis?.local && holding.quantity !== 0
         ? holding.costBasis.local / holding.quantity
@@ -476,21 +481,21 @@ export const AssetProfilePage = () => {
 
     return {
       numShares: Number(holding.quantity),
-      marketValue: Number(holding.marketValue.local ?? 0),
-      costBasis: Number(holding.costBasis?.local ?? 0),
-      averagePrice: Number(averageCostPrice),
+      marketValue: cv(Number(holding.marketValue.local ?? 0)),
+      costBasis: cv(Number(holding.costBasis?.local ?? 0)),
+      averagePrice: cv(Number(averageCostPrice)),
       portfolioPercent: Number(holding.weight ?? 0),
-      todaysReturn: todaysReturn != null ? Number(todaysReturn) : null,
+      todaysReturn: todaysReturn != null ? cv(Number(todaysReturn)) : null,
       todaysReturnPercent: todaysReturnPercent != null ? Number(todaysReturnPercent) : null,
-      totalReturn: Number(holding.totalGain?.local ?? 0),
+      totalReturn: cv(Number(holding.totalGain?.local ?? 0)),
       totalReturnPercent: Number(holding.totalGainPct ?? 0),
-      currency: holding.localCurrency ?? holding.instrument?.currency ?? baseCurrency,
+      currency: displayCurrencyCode(),
       quoteCurrency: quoteData?.quoteCurrency ?? null,
       quote: quoteData?.quote ?? null,
       bondSpec: bondSpec ?? null,
       optionSpec: optionSpec ?? null,
     };
-  }, [holding, quote, bondSpec, optionSpec]);
+  }, [holding, quote, bondSpec, optionSpec, convert, displayCurrencyCode]);
 
   // Build toggle items dynamically based on available data
   const toggleItems = useMemo(() => {

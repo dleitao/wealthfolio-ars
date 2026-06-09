@@ -28,7 +28,7 @@ pub struct ArgentinaDatosInflationPoint {
 
 #[async_trait]
 pub trait InflationRepositoryTrait: Send + Sync {
-    fn upsert_records(&self, records: &[InflationRecord]) -> Result<()>;
+    async fn upsert_records(&self, records: &[InflationRecord]) -> Result<()>;
     fn get_all(&self) -> Result<Vec<InflationRecord>>;
 }
 
@@ -42,8 +42,8 @@ impl InflationService {
     }
 
     /// Store (upsert) a batch of records.
-    pub fn store(&self, records: &[InflationRecord]) -> Result<()> {
-        self.repository.upsert_records(records)
+    pub async fn store(&self, records: &[InflationRecord]) -> Result<()> {
+        self.repository.upsert_records(records).await
     }
 
     /// Return all stored monthly records ordered by period.

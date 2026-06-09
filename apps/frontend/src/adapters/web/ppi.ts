@@ -35,6 +35,6 @@ export const getPpiCredentialsStatus = async (): Promise<boolean> => {
   return true;
 };
 
-export const syncPpiData = async (): Promise<void> => {
-  return invoke<void>("sync_ppi_data");
+export const syncPpiData = async (startDate?: string, endDate?: string): Promise<void> => {
+  return invoke<void>("sync_ppi_data", { startDate, endDate });
 };

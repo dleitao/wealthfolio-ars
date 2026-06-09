@@ -14,8 +14,14 @@ const COL_TIPO_INSTRUMENTO: usize = 2;
 const COL_CONCERTACION: usize = 3;
 const COL_CANTIDAD: usize = 4;
 const COL_PRECIO: usize = 5;
+const COL_LIQUIDACION: usize = 6;
 const COL_MONEDA: usize = 7;
 const COL_IMPORTE: usize = 8;
+
+fn extract_boleto_id(desc: &str) -> Option<u64> {
+    // "Boleto / 5684749 / APCOLFUT / 4 / $" → 5684749
+    desc.split(" / ").nth(1)?.trim().parse().ok()
+}
 
 fn balanz_instrument_type(tipo: &str) -> Option<&'static str> {
     match tipo.trim().to_uppercase().as_str() {
@@ -55,6 +61,24 @@ pub fn parse_balanz(rows: &[Vec<String>], account_id: Option<String>) -> (Vec<Ac
         })
         .collect();
 
+    // First pass: build boleto_id → principal for APCOLCON (caución apertura) rows.
+    // APCOLFUT (vencimiento) uses this to compute net interest = importe_fut - principal.
+    let caucion_principals: std::collections::HashMap<u64, Decimal> = rows
+        .iter()
+        .skip(1)
+        .filter(|r| r.len() >= 9)
+        .filter_map(|r| {
+            let upper = r[COL_DESCRIPCION].trim().to_uppercase();
+            if upper.starts_with("BOLETO") && upper.contains("APCOLCON") {
+                let id = extract_boleto_id(r[COL_DESCRIPCION].trim())?;
+                let principal = parse_decimal(&r[COL_IMPORTE]).map(|d| d.abs())?;
+                Some((id, principal))
+            } else {
+                None
+            }
+        })
+        .collect();
+
     // Skip header row
     for (i, row) in rows.iter().enumerate().skip(1) {
         if row.len() < 9 {
@@ -64,12 +88,19 @@ pub fn parse_balanz(rows: &[Vec<String>], account_id: Option<String>) -> (Vec<Ac
         if desc.is_empty() {
             continue;
         }
-        match parse_balanz_row(row.as_slice(), i + 1, account_id.clone(), &fci_names) {
+        match parse_balanz_row(row.as_slice(), i + 1, account_id.clone(), &fci_names, &caucion_principals) {
             Ok(Some(activity)) => activities.push(activity),
             Ok(None) => {} // skipped row
             Err(e) => errors.push(format!("Row {}: {}", i + 1, e)),
         }
     }
+    let has_deposits = activities.iter().any(|a| a.activity_type == "DEPOSIT");
+    if !has_deposits && !activities.is_empty() {
+        log::warn!(
+            "[Balanz] No deposit activities found — performance will be calculated from cost basis (HOLDINGS mode fallback)"
+        );
+    }
+
     (activities, errors)
 }
 
@@ -78,9 +109,60 @@ fn parse_balanz_row(
     line: usize,
     account_id: Option<String>,
     fci_names: &std::collections::HashMap<String, String>,
+    caucion_principals: &std::collections::HashMap<u64, Decimal>,
 ) -> Result<Option<ActivityImport>, String> {
     let desc = row[COL_DESCRIPCION].trim();
     let upper = desc.to_uppercase();
+
+    // Cauciones bursátiles: pares de boletos APCOLCON (apertura) + APCOLFUT (vencimiento).
+    // APCOLCON se ignora (el capital no sale del portfolio).
+    // APCOLFUT emite INTEREST con el interés neto = importe_fut - principal_apertura.
+    if upper.starts_with("BOLETO") && upper.contains("APCOLCON") {
+        return Ok(None);
+    }
+    if upper.starts_with("BOLETO") && upper.contains("APCOLFUT") {
+        let id = extract_boleto_id(desc).ok_or_else(|| "caución: no boleto id".to_string())?;
+        let importe_fut = parse_decimal(&row[COL_IMPORTE])
+            .ok_or_else(|| "caución: no importe".to_string())?
+            .abs();
+        let principal = caucion_principals.get(&(id.saturating_sub(1))).copied().unwrap_or(Decimal::ZERO);
+        let interes = if principal > Decimal::ZERO { importe_fut - principal } else { importe_fut };
+        let date = parse_date_iso(row[COL_LIQUIDACION].trim())
+            .ok_or_else(|| format!("caución: invalid liquidacion date '{}'", row[COL_LIQUIDACION].trim()))?;
+        let currency = map_balanz_currency(row[COL_MONEDA].trim());
+        return Ok(Some(ActivityImport {
+            id: None,
+            date,
+            symbol: String::new(),
+            activity_type: "INTEREST".to_string(),
+            quantity: None,
+            unit_price: None,
+            currency,
+            fee: None,
+            amount: Some(interes),
+            comment: Some(desc.to_string()),
+            account_id,
+            account_name: None,
+            symbol_name: None,
+            exchange_mic: None,
+            quote_ccy: None,
+            instrument_type: None,
+            quote_mode: None,
+            errors: None,
+            warnings: None,
+            duplicate_of_id: None,
+            duplicate_of_line_number: None,
+            is_draft: true,
+            is_valid: true,
+            line_number: Some(line as i32),
+            fx_rate: None,
+            subtype: None,
+            asset_id: None,
+            isin: None,
+            force_import: false,
+            is_external: None,
+        }));
+    }
 
     let mut activity_type = classify_balanz(&upper)?;
     let Some(ref mut at) = activity_type else { return Ok(None); };
@@ -96,16 +178,25 @@ fn parse_balanz_row(
     let currency = map_balanz_currency(row[COL_MONEDA].trim());
 
     let quantity = parse_decimal_abs(&row[COL_CANTIDAD]);
-    // Raw importe (signed) determines DIVIDEND vs FEE
     let raw_importe = parse_decimal(&row[COL_IMPORTE]);
-    if *at == "DIVIDEND" && raw_importe.map(|v| v < Decimal::ZERO).unwrap_or(false) {
+    let raw_precio = parse_decimal(&row[COL_PRECIO]);
+    let is_no_price = raw_precio.map(|p| p == Decimal::from(-1)).unwrap_or(true);
+
+    // Negative importe reclassifications
+    if (*at == "DIVIDEND" || *at == "INTEREST") && raw_importe.map(|v| v < Decimal::ZERO).unwrap_or(false) {
         *at = "FEE";
     }
+    // SELL with price sentinel and negative importe = ARS commission leg of MEP/dólar-cable operation.
+    // Without this, both ARS-commission and USD-proceeds rows become SELL, creating a short position.
+    if *at == "SELL" && is_no_price && raw_importe.map(|v| v < Decimal::ZERO).unwrap_or(false) {
+        *at = "FEE";
+    }
+
     let importe = raw_importe.map(|d| d.abs());
     let activity_type = at.to_string();
 
     // Precio == -1 is a sentinel "no price"
-    let unit_price = parse_decimal(&row[COL_PRECIO]).filter(|&p| p != Decimal::from(-1));
+    let unit_price = raw_precio.filter(|&p| p != Decimal::from(-1));
 
     // For cash activities (DEPOSIT, WITHDRAWAL, FEE), symbol is left empty
     let symbol = if matches!(activity_type.as_str(), "DEPOSIT" | "WITHDRAWAL" | "FEE") {
@@ -195,6 +286,9 @@ fn classify_balanz<'a>(upper: &str) -> Result<Option<&'a str>, String> {
     }
     if upper.starts_with("RECIBO DE COBRO") {
         return Ok(Some("DEPOSIT"));
+    }
+    if upper.starts_with("COMPROBANTE DE PAGO") {
+        return Ok(Some("WITHDRAWAL"));
     }
     if upper.starts_with("MOVIMIENTO MANUAL") {
         // Tax withholdings (retenciones IIGG, BBPP) affect the cash balance → FEE
@@ -352,6 +446,100 @@ mod tests {
         assert_eq!(parse_decimal("1234.56"),  Some(Decimal::from_str("1234.56").unwrap()));
         assert_eq!(parse_decimal("0"),        Some(Decimal::ZERO));
         assert_eq!(parse_decimal(""),         None);
+    }
+
+    #[test]
+    fn negative_renta_becomes_fee() {
+        // RENTA (INTEREST) with negative importe is a withholding tax — must be FEE.
+        let rows = vec![
+            row("header", "Ticker", "Tipo de Instrumento", "Moneda", "Cantidad", "Precio", "Importe"),
+            row("Renta / AL35", "AL35", "Bonos", "Pesos", "0", "-1", "-420.50"),
+        ];
+        let (activities, errors) = parse_balanz(&rows, None);
+        assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+        assert_eq!(activities.len(), 1);
+        assert_eq!(activities[0].activity_type, "FEE");
+        assert_eq!(activities[0].amount, Some(Decimal::from_str("420.50").unwrap()));
+    }
+
+    fn caucion_row(desc: &str, liquidacion: &str, moneda: &str, importe: &str) -> Vec<String> {
+        vec![
+            desc.to_string(), String::new(), String::new(),
+            "2026-05-22".to_string(), "0".to_string(), "-1".to_string(),
+            liquidacion.to_string(), moneda.to_string(), importe.to_string(),
+        ]
+    }
+
+    #[test]
+    fn mep_venta_ars_commission_becomes_fee_not_sell() {
+        // MEP / dólar-cable: el mismo boleto VENTA aparece dos veces:
+        //   - una fila en ARS con precio=-1(sentinel) e importe negativo (comisión)
+        //   - una fila en USD con precio real e importe positivo (cobro efectivo)
+        // Sin este fix ambas se importan como SELL → posición corta en el bono.
+        let rows = vec![
+            row("header", "Ticker", "Tipo de Instrumento", "Moneda", "Cantidad", "Precio", "Importe"),
+            row("Boleto / 5937562 / VENTA / 0 / AL30 / usd", "AL30", "Bonos", "Pesos",    "-1121", "-1",     "-25.32"),
+            row("Boleto / 5937562 / VENTA / 0 / AL30 / usd", "AL30", "Bonos", "Dólares",  "-1121", "0.6418", "716.58"),
+        ];
+        let (activities, errors) = parse_balanz(&rows, None);
+        assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+        assert_eq!(activities.len(), 2);
+        // Fila con precio sentinel y comisión negativa → FEE, sin símbolo
+        assert_eq!(activities[0].activity_type, "FEE");
+        assert_eq!(activities[0].currency, "ARS");
+        assert_eq!(activities[0].symbol, "");
+        assert_eq!(activities[0].amount, Some(Decimal::from_str("25.32").unwrap()));
+        // Fila con precio real → SELL legítima
+        assert_eq!(activities[1].activity_type, "SELL");
+        assert_eq!(activities[1].currency, "USD");
+        assert_eq!(activities[1].symbol, "AL30");
+    }
+
+    #[test]
+    fn caucion_apcolcon_is_skipped() {
+        let rows = vec![
+            row("header", "Ticker", "Tipo de Instrumento", "Moneda", "Cantidad", "Precio", "Importe"),
+            caucion_row("Boleto / 5491004 / APCOLCON / 0 / $", "2026-05-18", "Pesos", "-1000000"),
+        ];
+        let (activities, errors) = parse_balanz(&rows, None);
+        assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+        assert!(activities.is_empty(), "APCOLCON debe ser ignorado");
+    }
+
+    #[test]
+    fn caucion_apcolfut_produces_net_interest() {
+        let rows = vec![
+            row("header", "Ticker", "Tipo de Instrumento", "Moneda", "Cantidad", "Precio", "Importe"),
+            caucion_row("Boleto / 5491004 / APCOLCON / 0 / $", "2026-05-18", "Pesos", "-1000000"),
+            caucion_row("Boleto / 5491005 / APCOLFUT / 4 / $", "2026-05-22", "Pesos", "1001898.05"),
+        ];
+        let (activities, errors) = parse_balanz(&rows, None);
+        assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+        assert_eq!(activities.len(), 1);
+        let a = &activities[0];
+        assert_eq!(a.activity_type, "INTEREST");
+        assert_eq!(a.currency, "ARS");
+        assert_eq!(a.date, "2026-05-22"); // fecha de Liquidacion, no Concertacion
+        assert_eq!(a.symbol, "");
+        // interés neto = 1001898.05 - 1000000 = 1898.05
+        let expected = Decimal::from_str("1898.05").unwrap();
+        assert_eq!(a.amount, Some(expected), "debe ser el interés neto, no el importe completo");
+    }
+
+    #[test]
+    fn caucion_apcolfut_without_pair_fallsback_to_full_amount() {
+        // Solo APCOLFUT sin APCOLCON correspondiente → usa el importe completo como INTEREST
+        let rows = vec![
+            row("header", "Ticker", "Tipo de Instrumento", "Moneda", "Cantidad", "Precio", "Importe"),
+            caucion_row("Boleto / 5491005 / APCOLFUT / 4 / $", "2026-05-22", "Pesos", "1001898.05"),
+        ];
+        let (activities, errors) = parse_balanz(&rows, None);
+        assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+        assert_eq!(activities.len(), 1);
+        let a = &activities[0];
+        assert_eq!(a.activity_type, "INTEREST");
+        let expected = Decimal::from_str("1001898.05").unwrap();
+        assert_eq!(a.amount, Some(expected));
     }
 
     #[test]

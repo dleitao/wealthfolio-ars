@@ -1,5 +1,6 @@
 import {
   parseCsv,
+  parseXlsx,
   listImportTemplates,
   getAccountImportMapping,
   linkAccountTemplate,
@@ -41,19 +42,25 @@ import { FileDropzone } from "../components/file-dropzone";
 import { HelpTooltip } from "../components/help-tooltip";
 import {
   setAccountId,
+  setDraftActivities,
   setFile,
+  setIsXlsxImport,
   setMapping,
   setParseConfig,
   setParsedData,
   setSelectedTemplate,
+  setStep,
   setSuppressLinkedTemplate,
 } from "../context/import-actions";
 import { useImportContext, type ParseConfig } from "../context/import-context";
+import { activityImportsToDrafts } from "../utils/draft-utils";
 import {
   createDefaultParseConfig,
   createDefaultActivityTemplate,
   createEmptyHoldingsMapping,
   isDefaultActivityTemplateId,
+  isXlsxBrokerTemplateId,
+  isPpiXlsxTemplateId,
   prependDefaultActivityTemplate,
 } from "../utils/default-activity-template";
 
@@ -322,6 +329,7 @@ interface TemplateSelectorProps {
   config: ParseConfig;
   onConfigChange: (updates: Partial<ParseConfig>) => void;
   hasConfigErrors?: boolean;
+  xlsxBrokerName?: string | null;
 }
 
 function TemplateSelector({
@@ -332,7 +340,9 @@ function TemplateSelector({
   config,
   onConfigChange,
   hasConfigErrors = false,
+  xlsxBrokerName = null,
 }: TemplateSelectorProps) {
+  const isXlsxTemplate = xlsxBrokerName !== null;
   const [settingsOpen, setSettingsOpen] = useState(hasConfigErrors);
 
   useEffect(() => {
@@ -353,7 +363,18 @@ function TemplateSelector({
         />
       </div>
 
-      {/* Parse Settings — collapsible */}
+      {/* XLSX broker hint — shown instead of parse settings */}
+      {isXlsxTemplate && (
+        <div className="border-t px-3 py-2">
+          <p className="text-muted-foreground flex items-center gap-1.5 text-xs">
+            <Icons.FileText className="h-3.5 w-3.5 shrink-0" />
+            Upload your {xlsxBrokerName} XLSX file above — it will be imported automatically without manual mapping.
+          </p>
+        </div>
+      )}
+
+      {/* Parse Settings — collapsible, hidden for XLSX templates */}
+      {!isXlsxTemplate && (
       <Collapsible open={settingsOpen} onOpenChange={setSettingsOpen}>
         <CollapsibleTrigger asChild>
           <div
@@ -473,6 +494,7 @@ function TemplateSelector({
           </div>
         </CollapsibleContent>
       </Collapsible>
+      )}
     </div>
   );
 }
@@ -482,8 +504,9 @@ function TemplateSelector({
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function UploadStep() {
-  const { state, dispatch } = useImportContext();
+  const { state, dispatch, previewAssets } = useImportContext();
   const [parseError, setParseError] = useState<string | null>(null);
+  const [xlsxError, setXlsxError] = useState<string | null>(null);
   const { accounts } = useAccounts();
   const { isMobile } = usePlatform();
 
@@ -519,6 +542,16 @@ export function UploadStep() {
   const applyTemplate = useCallback(
     async (template: ImportTemplateData, options?: { selectTemplate?: boolean }) => {
       const selectTemplate = options?.selectTemplate ?? true;
+
+      // XLSX broker templates (Balanz, PPI) don't use CSV field mappings.
+      // Just mark the template as selected — the file upload handler routes .xlsx automatically.
+      if (isXlsxBrokerTemplateId(template.id) || isPpiXlsxTemplateId(template.id)) {
+        if (selectTemplate) {
+          dispatch(setSelectedTemplate(template.id, template.scope));
+        }
+        return;
+      }
+
       const nextParseConfig =
         importType === ImportType.ACTIVITY && isDefaultActivityTemplateId(template.id)
           ? baselineParseConfig
@@ -716,10 +749,11 @@ export function UploadStep() {
     [dispatch],
   );
 
-  const { mutate: parseFile, isPending } = useMutation({
+  const { mutate: parseFile, isPending: isCsvPending } = useMutation({
     mutationFn: (file: File) => parseCsv(file, state.parseConfig),
     onSuccess: (result) => {
       setParseError(null);
+      dispatch(setIsXlsxImport(false));
       dispatch(setParsedData(result.headers, result.rows));
       dispatch(setParseConfig(result.detectedConfig));
     },
@@ -728,17 +762,47 @@ export function UploadStep() {
     },
   });
 
+  const { mutate: parseXlsxFile, isPending: isXlsxPending } = useMutation({
+    mutationFn: (file: File) => parseXlsx(file, state.accountId || undefined),
+    onSuccess: (result) => {
+      if (result.activities.length === 0 && result.errors.length > 0) {
+        setXlsxError(result.errors.join("\n"));
+        return;
+      }
+      setXlsxError(null);
+      const drafts = activityImportsToDrafts(result.activities, state.accountId);
+      dispatch(setIsXlsxImport(true));
+      dispatch(setDraftActivities(drafts));
+      dispatch({ type: "SET_ASSET_PREVIEW_ITEMS", payload: [] });
+      dispatch({ type: "CLEAR_PENDING_IMPORT_ASSETS" });
+      dispatch(setStep("assets"));
+      void previewAssets(drafts);
+    },
+    onError: (error) => {
+      setXlsxError(error instanceof Error ? error.message : "Failed to parse XLSX file");
+    },
+  });
+
+  const isPending = isCsvPending || isXlsxPending;
+
   const handleFileSelect = useCallback(
     (file: File | null) => {
       if (file) {
         dispatch(setFile(file));
-        parseFile(file);
+        setParseError(null);
+        setXlsxError(null);
+        if (file.name.toLowerCase().endsWith(".xlsx")) {
+          parseXlsxFile(file);
+        } else {
+          parseFile(file);
+        }
       } else {
         dispatch(setFile(null as unknown as File));
         dispatch(setParsedData([], []));
+        dispatch(setIsXlsxImport(false));
       }
     },
-    [dispatch, parseFile],
+    [dispatch, parseFile, parseXlsxFile],
   );
 
   const handleConfigChange = useCallback(
@@ -759,7 +823,8 @@ export function UploadStep() {
     [dispatch, state.file, state.parseConfig],
   );
 
-  const hasParseErrors = parseError !== null;
+  const hasParseErrors = parseError !== null || xlsxError !== null;
+  const displayParseError = xlsxError ?? parseError;
 
   return (
     <div className="flex flex-col gap-4">
@@ -822,19 +887,22 @@ export function UploadStep() {
         <div className="flex flex-col gap-2">
           <div className="flex items-center gap-1.5">
             <span className="text-muted-foreground font-mono text-[10px] tabular-nums">02</span>
-            <h2 className="text-sm font-semibold">Upload CSV File</h2>
-            <HelpTooltip content="After uploading, double-check the Parse Settings below — make sure the delimiter, date format, and rows to skip match your file." />
+            <h2 className="text-sm font-semibold">Upload File</h2>
+            <HelpTooltip content="Upload a CSV file (needs mapping) or an XLSX file from Balanz/PPI (auto-detected, skips mapping)." />
           </div>
           <div className="h-[116px]">
             <FileDropzone
               file={state.file}
               onFileChange={handleFileSelect}
               isLoading={isPending}
-              accept=".csv"
+              accept=".csv,.xlsx"
               isValid={!hasParseErrors}
-              error={parseError}
+              error={displayParseError}
             />
           </div>
+          {displayParseError && (
+            <p className="text-destructive text-xs">{displayParseError}</p>
+          )}
         </div>
       </div>
 
@@ -859,6 +927,13 @@ export function UploadStep() {
           config={state.parseConfig}
           onConfigChange={handleConfigChange}
           hasConfigErrors={hasParseErrors}
+          xlsxBrokerName={
+            isPpiXlsxTemplateId(effectiveSelectedTemplateId)
+              ? "PPI"
+              : isXlsxBrokerTemplateId(effectiveSelectedTemplateId)
+                ? "Balanz"
+                : null
+          }
         />
       </div>
 

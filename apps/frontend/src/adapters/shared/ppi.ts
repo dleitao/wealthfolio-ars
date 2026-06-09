@@ -33,9 +33,12 @@ export const getPpiCredentialsStatus = async (): Promise<boolean> => {
   }
 };
 
-export const syncPpiData = async (): Promise<void> => {
+export const syncPpiData = async (startDate?: string, endDate?: string): Promise<void> => {
   try {
-    return await invoke<void>("sync_ppi_data");
+    return await invoke<void>("sync_ppi_data", {
+      startDate: startDate ?? null,
+      endDate: endDate ?? null,
+    });
   } catch (err) {
     logger.error("Error syncing PPI data.");
     throw err;

@@ -35,11 +35,13 @@ pub(crate) mod device_sync_engine;
 mod exchange_rates;
 mod goals;
 mod health;
+mod argentina;
 mod holdings;
 mod limits;
 mod market_data;
 mod net_worth;
 mod performance;
+mod ppi;
 mod portfolio;
 mod secrets;
 mod settings;
@@ -106,7 +108,9 @@ pub fn app_router(state: Arc<AppState>, config: &Config) -> Router {
         .merge(ai_providers::router())
         .merge(ai_chat::router())
         .merge(health::router())
-        .merge(custom_providers::router());
+        .merge(custom_providers::router())
+        .merge(ppi::router())
+        .merge(argentina::router());
 
     #[cfg(feature = "device-sync")]
     {

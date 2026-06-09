@@ -38,9 +38,10 @@ use crate::secrets::SecretStore;
 
 use wealthfolio_market_data::{
     mic_to_currency, mic_to_exchange_name, yahoo_exchange_to_mic, yahoo_suffix_to_mic,
-    AlphaVantageProvider, AssetProfile as MarketAssetProfile, BoerseFrankfurtProvider,
-    BondQuoteMetadata, FinnhubProvider, MarketDataAppProvider, MetalPriceApiProvider,
-    OpenFigiProvider, ProviderId, ProviderRegistry, Quote as MarketQuote, QuoteContext,
+    AlphaVantageProvider, ArgentinaDatosProvider, AssetProfile as MarketAssetProfile,
+    BalanzFciProvider, BoerseFrankfurtProvider, BondQuoteMetadata, DolarApiProvider,
+    FinnhubProvider, MarketDataAppProvider, MetalPriceApiProvider, OpenFigiProvider,
+    PpiMarketDataProvider, ProviderId, ProviderRegistry, Quote as MarketQuote, QuoteContext,
     ResolverChain, SearchResult as MarketSearchResult, SplitEvent, UsTreasuryCalcProvider,
     YahooProvider,
 };
@@ -238,6 +239,62 @@ impl MarketDataClient {
             DATA_SOURCE_BOERSE_FRANKFURT => {
                 // European bond pricing via Börse Frankfurt (no API key)
                 Ok(Some(Arc::new(BoerseFrankfurtProvider::new())))
+            }
+            DATA_SOURCE_ARGENTINA_DATOS => {
+                Ok(Some(Arc::new(ArgentinaDatosProvider::new())))
+            }
+            DATA_SOURCE_DOLAR_API => {
+                Ok(Some(Arc::new(DolarApiProvider::new())))
+            }
+            DATA_SOURCE_BALANZ_FCI => {
+                Ok(Some(Arc::new(BalanzFciProvider::new())))
+            }
+            DATA_SOURCE_PPI => {
+                let store = Arc::clone(secret_store);
+                let cred_fetcher = Box::new(move || {
+                    let api_key = store
+                        .get_secret("ppi_api_key")
+                        .ok()
+                        .flatten()
+                        .filter(|s| !s.is_empty())
+                        .ok_or_else(|| wealthfolio_market_data::errors::MarketDataError::ProviderError {
+                            provider: "PPI".to_string(),
+                            message: "ppi_api_key not configured".to_string(),
+                        })?;
+                    let api_secret = store
+                        .get_secret("ppi_api_secret")
+                        .ok()
+                        .flatten()
+                        .filter(|s| !s.is_empty())
+                        .ok_or_else(|| wealthfolio_market_data::errors::MarketDataError::ProviderError {
+                            provider: "PPI".to_string(),
+                            message: "ppi_api_secret not configured".to_string(),
+                        })?;
+                    Ok((api_key, api_secret))
+                });
+                let authorized_client = match secret_store
+                    .get_secret("ppi_authorized_client")
+                    .ok()
+                    .flatten()
+                    .filter(|s| !s.is_empty())
+                {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                let client_key = match secret_store
+                    .get_secret("ppi_client_key")
+                    .ok()
+                    .flatten()
+                    .filter(|s| !s.is_empty())
+                {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                Ok(Some(Arc::new(PpiMarketDataProvider::new(
+                    cred_fetcher,
+                    authorized_client,
+                    client_key,
+                ))))
             }
             _ => {
                 warn!("Unknown provider ID: {}", provider_id);

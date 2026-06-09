@@ -361,6 +361,7 @@ pub fn run() {
             commands::activity::delete_import_template,
             commands::activity::check_existing_duplicates,
             commands::activity::parse_csv,
+            commands::activity::parse_xlsx_file,
             // Settings commands
             commands::settings::get_settings,
             commands::settings::is_auto_update_check_enabled,
@@ -475,6 +476,16 @@ pub fn run() {
             commands::secrets::set_secret,
             commands::secrets::get_secret,
             commands::secrets::delete_secret,
+            // PPI broker commands
+            commands::ppi_sync::save_ppi_credentials,
+            commands::ppi_sync::delete_ppi_credentials,
+            commands::ppi_sync::get_ppi_credentials_status,
+            commands::ppi_sync::sync_ppi_data,
+            // Argentina commands
+            commands::argentina::sync_inflation_data,
+            commands::argentina::get_inflation_data,
+            commands::argentina::sync_argentina_sectors,
+            commands::argentina::sync_ars_rates,
             // Provider settings commands
             commands::providers_settings::get_market_data_providers_settings,
             commands::providers_settings::update_market_data_provider_settings,

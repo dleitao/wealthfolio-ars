@@ -20,7 +20,7 @@ use chrono::{DateTime, Months, NaiveDate, Utc};
 use rust_decimal::prelude::FromPrimitive;
 use rust_decimal::Decimal;
 use std::collections::{HashMap, HashSet};
-use wealthfolio_core::accounts::{Account, AccountServiceTrait, NewAccount, TrackingMode};
+use wealthfolio_core::accounts::{Account, AccountServiceTrait, AccountUpdate, NewAccount, TrackingMode};
 use wealthfolio_core::activities::{
     compute_idempotency_key, ActivityRepositoryTrait, ActivityServiceTrait, ActivityUpsert,
     NewActivity, ACTIVITY_TYPE_BUY, ACTIVITY_TYPE_SELL,
@@ -280,6 +280,43 @@ impl BrokerSyncServiceTrait for BrokerSyncService {
             .into_iter()
             .filter(|a| a.provider_account_id.is_some())
             .collect())
+    }
+
+    async fn ensure_tracking_mode(&self, provider_ids: &[String], mode: TrackingMode) -> Result<()> {
+        let all_accounts = self.account_service.get_all_accounts()?;
+        for acct in all_accounts {
+            let matches = acct
+                .provider_account_id
+                .as_deref()
+                .map(|id| provider_ids.iter().any(|pid| pid == id))
+                .unwrap_or(false);
+            if matches && acct.tracking_mode != mode {
+                info!(
+                    "[Sync] Switching account '{}' to {:?} tracking mode",
+                    acct.id, mode
+                );
+                let update = AccountUpdate {
+                    id: Some(acct.id.clone()),
+                    name: acct.name.clone(),
+                    account_type: acct.account_type.clone(),
+                    group: acct.group.clone(),
+                    is_default: acct.is_default,
+                    is_active: acct.is_active,
+                    platform_id: acct.platform_id.clone(),
+                    account_number: acct.account_number.clone(),
+                    meta: acct.meta.clone(),
+                    provider: acct.provider.clone(),
+                    provider_account_id: acct.provider_account_id.clone(),
+                    is_archived: Some(acct.is_archived),
+                    tracking_mode: Some(mode),
+                };
+                self.account_service
+                    .update_account(update)
+                    .await
+                    .map_err(|e| wealthfolio_core::errors::Error::Unexpected(e.to_string()))?;
+            }
+        }
+        Ok(())
     }
 
     /// Get all platforms

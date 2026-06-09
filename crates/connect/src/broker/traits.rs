@@ -10,7 +10,7 @@ use super::models::{
 use crate::broker_ingest::BrokerSyncState;
 use crate::broker_ingest::{ImportRun, ImportRunMode, ImportRunStatus, ImportRunSummary};
 use crate::platform::Platform;
-use wealthfolio_core::accounts::Account;
+use wealthfolio_core::accounts::{Account, TrackingMode};
 use wealthfolio_core::errors::Result;
 
 /// Trait for fetching data from the cloud broker API
@@ -83,6 +83,15 @@ pub trait BrokerSyncServiceTrait: Send + Sync {
 
     /// Get all synced accounts (accounts with provider_account_id set)
     fn get_synced_accounts(&self) -> Result<Vec<Account>>;
+
+    /// Ensure all local accounts whose `provider_account_id` is in `provider_ids`
+    /// have the given tracking mode. Called after `sync_accounts` so newly-created
+    /// accounts can be switched before the main sync loop reads their mode.
+    async fn ensure_tracking_mode(
+        &self,
+        provider_ids: &[String],
+        mode: TrackingMode,
+    ) -> Result<()>;
 
     /// Get all platforms
     fn get_platforms(&self) -> Result<Vec<Platform>>;

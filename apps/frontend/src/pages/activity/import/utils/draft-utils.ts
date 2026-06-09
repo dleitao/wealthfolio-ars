@@ -504,6 +504,47 @@ export function createDraftActivities(
   });
 }
 
+/**
+ * Convert ActivityImport objects (from XLSX parsing) to DraftActivity objects,
+ * bypassing the CSV mapping step. Activities with errors get status "error".
+ */
+export function activityImportsToDrafts(
+  activities: ActivityImport[],
+  fallbackAccountId: string,
+): DraftActivity[] {
+  return activities.map((a, i) => {
+    const errors = (a.errors as Record<string, string[]> | undefined) ?? {};
+    const warnings = (a.warnings as Record<string, string[]> | undefined) ?? {};
+    const hasErrors = Object.keys(errors).length > 0;
+    return {
+      rowIndex: i,
+      rawRow: [],
+      activityDate: typeof a.date === "string" ? a.date : "",
+      activityType: (a.activityType as string) ?? "",
+      symbol: (a.symbol as string) || undefined,
+      quantity: a.quantity != null ? String(a.quantity) : null,
+      unitPrice: a.unitPrice != null ? String(a.unitPrice) : null,
+      amount: a.amount != null ? String(a.amount) : null,
+      currency: (a.currency as string) ?? "",
+      fee: a.fee != null ? String(a.fee) : null,
+      accountId: (a.accountId as string) || fallbackAccountId,
+      comment: (a.comment as string) || undefined,
+      symbolName: (a.symbolName as string) || undefined,
+      exchangeMic: (a.exchangeMic as string) || undefined,
+      quoteCcy: (a.quoteCcy as string) || undefined,
+      instrumentType: (a.instrumentType as string) || undefined,
+      quoteMode: (a.quoteMode as string) || undefined,
+      subtype: (a.subtype as string) || undefined,
+      isin: (a.isin as string) || undefined,
+      fxRate: a.fxRate != null ? String(a.fxRate) : undefined,
+      errors,
+      warnings,
+      status: hasErrors ? "error" : "valid",
+      isEdited: false,
+    };
+  });
+}
+
 export function draftToActivityImport(draft: DraftActivity): ActivityImport {
   const activityType = draft.activityType?.trim().toUpperCase();
   const subtype = draft.subtype?.trim().toUpperCase();

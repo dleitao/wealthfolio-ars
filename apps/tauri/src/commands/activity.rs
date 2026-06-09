@@ -5,10 +5,10 @@ use crate::context::ServiceContext;
 use log::debug;
 use tauri::State;
 use wealthfolio_core::activities::{
-    Activity, ActivityBulkMutationRequest, ActivityBulkMutationResult, ActivityImport,
+    parse_xlsx, Activity, ActivityBulkMutationRequest, ActivityBulkMutationResult, ActivityImport,
     ActivitySearchResponse, ActivityUpdate, ImportActivitiesResult, ImportAssetCandidate,
     ImportAssetPreviewItem, ImportMappingData, ImportTemplateData, NewActivity, ParseConfig,
-    ParsedCsvResult, Sort,
+    ParsedCsvResult, ParsedXlsxResult, Sort,
 };
 
 #[allow(clippy::too_many_arguments)]
@@ -276,6 +276,14 @@ pub async fn check_existing_duplicates(
         .activity_service()
         .check_existing_duplicates(idempotency_keys)
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn parse_xlsx_file(
+    content: Vec<u8>,
+    account_id: Option<String>,
+) -> Result<ParsedXlsxResult, String> {
+    parse_xlsx(&content, account_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

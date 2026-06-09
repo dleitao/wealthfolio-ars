@@ -23,8 +23,35 @@ pub fn map_ppi_activity(mv: PpiMovement) -> Option<AccountUniversalActivity> {
     // PPI sometimes returns "Ticker not found" — extract from description instead.
     let ticker = resolve_ticker(mv.ticker.as_deref(), desc);
 
+    // PPI has no native movement ID — build a deterministic one from identifying fields
+    // so re-syncing the same window produces the same IDs (idempotent).
+    let amount_cents = mv.amount.map(|a| (a * 100.0).round() as i64).unwrap_or(0);
+    let qty_units = mv.quantity.map(|q| (q * 10000.0).round() as i64).unwrap_or(0);
+    let activity_id = format!(
+        "ppi-{}-{}-{}-{}-{}",
+        mv.agreement_date.as_deref().unwrap_or(""),
+        desc.replace(' ', "_"),
+        amount_cents,
+        qty_units,
+        currency_code,
+    );
+
+    // For BUY/SELL, PPI includes commissions in `amount` but not in `price`.
+    // Extract the implicit fee so the snapshot engine accounts for it correctly.
+    let implicit_fee = if matches!(activity_type, "BUY" | "SELL") {
+        match (mv.amount, mv.quantity, mv.price) {
+            (Some(amt), Some(qty), Some(price)) if qty != 0.0 && price > 0.0 => {
+                let commission = amt.abs() - qty.abs() * price;
+                if commission > 1e-6 { Some(commission) } else { None }
+            }
+            _ => None,
+        }
+    } else {
+        None
+    };
+
     Some(AccountUniversalActivity {
-        id: None,
+        id: Some(activity_id),
         symbol: ticker.map(|sym| AccountUniversalActivitySymbol {
             symbol: Some(sym.clone()),
             raw_symbol: Some(sym),
@@ -37,6 +64,7 @@ pub fn map_ppi_activity(mv: PpiMovement) -> Option<AccountUniversalActivity> {
         price: mv.price.filter(|&p| p > 0.0),
         units: mv.quantity.map(f64::abs),
         amount: mv.amount.map(f64::abs),
+        fee: implicit_fee,
         currency: Some(AccountUniversalActivityCurrency {
             code: Some(currency_code),
             ..Default::default()

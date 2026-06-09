@@ -545,4 +545,58 @@ impl FxRepositoryTrait for FxRepository {
         self.create_fx_asset(from_currency, to_currency, source)
             .await
     }
+
+    async fn add_quotes_batch(
+        &self,
+        asset_id: &str,
+        from_currency: &str,
+        quotes: Vec<(NaiveDate, Decimal)>,
+        source: &str,
+    ) -> Result<usize> {
+        if quotes.is_empty() {
+            return Ok(0);
+        }
+        let asset_id_owned = asset_id.to_string();
+        let from_currency_owned = from_currency.to_string();
+        let source_owned = source.to_string();
+        let created_at = Utc::now().to_rfc3339();
+
+        let db_rows: Vec<QuoteDB> = quotes
+            .into_iter()
+            .filter_map(|(date, rate)| {
+                let date_str = date.format("%Y-%m-%d").to_string();
+                let ts = date.and_hms_opt(16, 0, 0)?.and_utc().to_rfc3339();
+                let rate_str = rate.to_string();
+                Some(QuoteDB {
+                    id: format!("{}_{}_{}", asset_id_owned, date_str, source_owned),
+                    asset_id: asset_id_owned.clone(),
+                    day: date_str,
+                    source: source_owned.clone(),
+                    open: Some(rate_str.clone()),
+                    high: Some(rate_str.clone()),
+                    low: Some(rate_str.clone()),
+                    close: rate_str.clone(),
+                    adjclose: Some(rate_str),
+                    volume: None,
+                    currency: from_currency_owned.clone(),
+                    created_at: created_at.clone(),
+                    timestamp: ts,
+                    notes: None,
+                })
+            })
+            .collect();
+
+        self.writer
+            .exec_tx(move |tx| {
+                let mut total: usize = 0;
+                for chunk in db_rows.chunks(1_000) {
+                    total += diesel::replace_into(quotes::table)
+                        .values(chunk)
+                        .execute(tx.conn())
+                        .map_err(StorageError::from)?;
+                }
+                Ok(total)
+            })
+            .await
+    }
 }

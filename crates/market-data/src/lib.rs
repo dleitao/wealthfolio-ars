@@ -78,11 +78,15 @@ pub use resolver::{
 
 // Re-export provider types
 pub use provider::alpha_vantage::AlphaVantageProvider;
+pub use provider::argentina_datos::ArgentinaDatosProvider;
+pub use provider::balanz_fci::BalanzFciProvider;
 pub use provider::boerse_frankfurt::BoerseFrankfurtProvider;
+pub use provider::dolar_api::DolarApiProvider;
 pub use provider::finnhub::FinnhubProvider;
 pub use provider::marketdata_app::MarketDataAppProvider;
 pub use provider::metal_price_api::MetalPriceApiProvider;
 pub use provider::openfigi::OpenFigiProvider;
+pub use provider::ppi::PpiMarketDataProvider;
 pub use provider::us_treasury_calc::{TreasuryBondDetails, UsTreasuryCalcProvider};
 pub use provider::yahoo::{YahooDividend, YahooProvider};
 pub use provider::{MarketDataProvider, ProviderCapabilities, RateLimit};

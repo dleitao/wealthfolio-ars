@@ -207,28 +207,26 @@ impl PerformanceService {
     /// HOLDINGS mode doesn't track cash flows at the transaction level, so
     /// TWR/MWR aren't meaningful — we measure unrealized P&L growth instead.
     ///
-    /// * `is_all_time` — when `true`, divides by ending `cost_basis` (the full
-    ///   amount invested). When `false`, divides by `investment_market_value`
-    ///   at the period start. Zero-guard returns 0% in either case.
     fn compute_holdings_period_return(
         start_point: &DailyAccountValuation,
         end_point: &DailyAccountValuation,
-        is_all_time: bool,
     ) -> (Decimal, Decimal) {
         let start_unrealized_pnl = start_point.investment_market_value - start_point.cost_basis;
         let end_unrealized_pnl = end_point.investment_market_value - end_point.cost_basis;
         let period_gain = end_unrealized_pnl - start_unrealized_pnl;
 
-        let period_return = if is_all_time {
-            if end_point.cost_basis.is_zero() {
-                Decimal::ZERO
-            } else {
-                end_unrealized_pnl / end_point.cost_basis
-            }
-        } else if start_point.investment_market_value.is_zero() {
+        // `period_gain / end_cost_basis` — period change in unrealized P&L relative
+        // to total investment. Always sign-consistent with `period_gain` (dividing by
+        // a positive never flips the sign), fixing the bug where a recovering but
+        // still-underwater portfolio showed positive gain + negative percent.
+        //
+        // When start_unrealized_pnl == 0 (typical first-day case) this degrades to
+        // end_unrealized_pnl / end_cost_basis, so there is no regression for accounts
+        // that start at market price.
+        let period_return = if end_point.cost_basis.is_zero() {
             Decimal::ZERO
         } else {
-            period_gain / start_point.investment_market_value
+            period_gain / end_point.cost_basis
         };
 
         (period_gain, period_return)
@@ -347,6 +345,16 @@ impl PerformanceService {
 
         let is_holdings_mode = matches!(tracking_mode, Some(TrackingMode::Holdings));
 
+        // Auto-fallback to HOLDINGS calculation for accounts with no tracked cash flows
+        // (e.g., XLSX-imported Balanz accounts that lack explicit deposit activities).
+        // Without deposits, net_contribution stays 0 and the MWR denominator ≈ 0 initially,
+        // producing astronomical returns as positions appreciate from a near-zero base.
+        let effective_holdings_mode = is_holdings_mode || {
+            let has_contributions = full_history.iter().any(|p| !p.net_contribution.is_zero());
+            let has_investments = full_history.iter().any(|p| p.cost_basis > Decimal::ZERO);
+            !has_contributions && has_investments
+        };
+
         // Set up per-day collectors. When we're not building the series, these
         // stay empty and the closure below skips the pushes entirely.
         let capacity = full_history.len();
@@ -362,7 +370,9 @@ impl PerformanceService {
         }
 
         // Shared TWR/MWR chain. The closure decides what to record per day.
-        let (cumulative_twr, cumulative_mwr) = Self::compute_compounded_daily_returns(
+        // When using the HOLDINGS fallback, errors from negative total_value
+        // (caused by unfunded BUYs) are suppressed since MWR won't be used.
+        let (cumulative_twr, cumulative_mwr) = match Self::compute_compounded_daily_returns(
             full_history,
             |prev_point, curr_point, sample| {
                 if !include_returns_series {
@@ -374,7 +384,7 @@ impl PerformanceService {
                 // flows, use all days. HOLDINGS mode: drop days where the
                 // holdings set changed, since we can't separate market moves
                 // from position-change-driven value shifts.
-                let should_exclude_from_risk = if is_holdings_mode {
+                let should_exclude_from_risk = if effective_holdings_mode {
                     let cost_basis_changed = prev_point.cost_basis != curr_point.cost_basis;
                     let contribution_changed = prev_point.cost_basis.is_zero()
                         && prev_point.net_contribution != curr_point.net_contribution;
@@ -391,7 +401,14 @@ impl PerformanceService {
                     value: sample.cumulative_twr_to_date.round_dp(DECIMAL_PRECISION),
                 });
             },
-        )?;
+        ) {
+            Ok(v) => v,
+            Err(e) if effective_holdings_mode => {
+                warn!("TWR/MWR calculation skipped (HOLDINGS fallback active): {}", e);
+                (Decimal::ZERO, Decimal::ZERO)
+            }
+            Err(e) => return Err(e),
+        };
 
         let annualized_twr =
             Self::calculate_annualized_return(actual_start_date, actual_end_date, cumulative_twr);
@@ -421,29 +438,40 @@ impl PerformanceService {
             (Decimal::ZERO, Decimal::ZERO)
         };
 
-        // `period_return` is the headline number displayed on the card. Mode
-        // matters:
+        // `period_return` is the headline number displayed on the card. It must
+        // always have the same sign as `period_gain` so the UI never shows a
+        // contradictory "+$X / -Y%" or "-$X / +Y%".
         //
-        // * HOLDINGS: unrealized-P&L-based, since we don't see cash flows at
-        //   transaction granularity.
-        // * TRANSACTIONS (full path / account page): MWR matches the dashboard
-        //   and handles cash flows per-day without blow-ups when the initial
-        //   value is small.
-        // * TRANSACTIONS (summary): MWR for the same reason — prior use of
-        //   `gain / start_value` was the source of the dashboard-side bug.
-        let (period_gain, period_return) = if is_holdings_mode {
-            let (gain, ret) = Self::compute_holdings_period_return(
-                start_point,
-                end_point,
-                start_date_opt.is_none(),
-            );
+        // Formula: gain / (start_value + net_cash_flow)  — the gain relative to
+        // total capital deployed during the period.
+        //
+        // * Sign-consistent with gain_loss_amount: denominator is total invested
+        //   capital, always positive for a healthy account.
+        // * Handles the tiny-start-value case (the original dashboard bug):
+        //   when a 100-unit seed is followed by a 2000-unit deposit, the
+        //   denominator is 2100, keeping the % small even if gain is tiny.
+        //   (The old `gain / start_value` gave -10.84%, misleadingly large.)
+        // * Avoids compounded-MWR distortion for volatile ARS accounts: daily-
+        //   compounded MWR can reach -95% when early large losses preceded large
+        //   deposits, even if the nominal gain is positive.
+        let transactions_period_return = {
+            let denominator = start_value + net_cash_flow;
+            if denominator.is_zero() {
+                Decimal::ZERO
+            } else {
+                gain_loss_amount / denominator
+            }
+        };
+
+        let (period_gain, period_return) = if effective_holdings_mode {
+            let (gain, ret) = Self::compute_holdings_period_return(start_point, end_point);
             (gain, Some(ret))
         } else {
-            (gain_loss_amount, Some(cumulative_mwr))
+            (gain_loss_amount, Some(transactions_period_return))
         };
 
         let wrap_non_holdings = |value: Decimal| {
-            if is_holdings_mode {
+            if effective_holdings_mode {
                 None
             } else {
                 Some(value.round_dp(DECIMAL_PRECISION))
@@ -467,7 +495,7 @@ impl PerformanceService {
             annualized_mwr: wrap_non_holdings(annualized_mwr),
             volatility: volatility.round_dp(DECIMAL_PRECISION),
             max_drawdown: max_drawdown.round_dp(DECIMAL_PRECISION),
-            is_holdings_mode,
+            is_holdings_mode: effective_holdings_mode,
         })
     }
 
@@ -1194,11 +1222,13 @@ mod tests {
         }
     }
 
-    /// HOLDINGS mode uses the cost-basis formula in both paths. TWR/MWR are
+    /// HOLDINGS mode: sign of period_return matches period_gain, and TWR/MWR are
     /// returned as `None` because they aren't meaningful without per-transaction
     /// cash-flow tracking.
+    /// start_unrealized_pnl = 0 so period_gain = end_unrealized_pnl = -100 →
+    /// period_return = -100/1000 = -0.10 (same result as old formula in this case).
     #[test]
-    fn perf_holdings_mode_uses_cost_basis_formula() {
+    fn perf_holdings_mode_period_return_sign_consistent() {
         let history = vec![
             valuation("2026-02-15", dec!(1000), dec!(1000), dec!(1000), dec!(1000)),
             valuation("2026-04-14", dec!(900), dec!(1000), dec!(900), dec!(1000)),
@@ -1207,16 +1237,53 @@ mod tests {
         let result = PerformanceService::compute_account_performance(
             &history,
             Some(TrackingMode::Holdings),
-            None, // ALL-time branch
+            None,
             false,
         )
         .expect("holdings should compute");
 
-        // end_unrealized_pnl = 900 - 1000 = -100; return = -100 / 1000 = -0.10.
         let period_return = result.period_return.expect("period_return should be Some");
         assert_eq!(period_return.round_dp(4), dec!(-0.1));
         assert!(result.cumulative_twr.is_none());
         assert!(result.cumulative_mwr.is_none());
         assert!(result.is_holdings_mode);
+    }
+
+    /// Regression: recovering-from-loss portfolio (like Balanz XLSX) must show
+    /// period_return with the same sign as period_gain. Before the fix,
+    /// `end_unrealized_pnl / end_cost_basis` was negative even when prices improved.
+    #[test]
+    fn perf_holdings_mode_gain_and_return_same_sign_when_recovering_from_loss() {
+        let history = vec![
+            // start: total=500, contrib=0, inv_mv=500, cb=1000 → unrealized_pnl = -500
+            valuation("2026-01-01", dec!(500), Decimal::ZERO, dec!(500), dec!(1000)),
+            // end:   total=600, contrib=0, inv_mv=600, cb=1000 → unrealized_pnl = -400
+            valuation("2026-06-01", dec!(600), Decimal::ZERO, dec!(600), dec!(1000)),
+        ];
+
+        let result = PerformanceService::compute_account_performance(
+            &history,
+            Some(TrackingMode::Holdings),
+            None,
+            false,
+        )
+        .expect("should compute");
+
+        let period_gain = result.period_gain;
+        let period_return = result.period_return.expect("should be Some");
+
+        // period_gain = (-400) - (-500) = +100 → positive (prices recovered)
+        assert!(
+            period_gain > Decimal::ZERO,
+            "period_gain = {} should be positive",
+            period_gain
+        );
+        // period_return = 100 / 1000 = 0.10 → same sign
+        assert!(
+            period_return > Decimal::ZERO,
+            "period_return = {} should be positive when period_gain is positive",
+            period_return
+        );
+        assert_eq!(period_return.round_dp(2), dec!(0.10));
     }
 }

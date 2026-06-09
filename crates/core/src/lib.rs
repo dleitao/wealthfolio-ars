@@ -15,6 +15,7 @@ pub mod events;
 pub mod fx;
 pub mod goals;
 pub mod health;
+pub mod inflation;
 pub mod limits;
 pub mod planning;
 pub mod portfolio;

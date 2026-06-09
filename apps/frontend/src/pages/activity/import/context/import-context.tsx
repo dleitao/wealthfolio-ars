@@ -131,6 +131,8 @@ export interface ImportState {
   lastValidatedRevision: number | null;
   isPreviewingAssets: boolean;
   assetPreviewError: string | null;
+  /** True when the import came from an XLSX file (no mapping step needed). */
+  isXlsxImport: boolean;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -173,6 +175,7 @@ const INITIAL_STATE: ImportState = {
   lastValidatedRevision: null,
   isPreviewingAssets: false,
   assetPreviewError: null,
+  isXlsxImport: false,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -216,6 +219,7 @@ export type ImportAction =
   | { type: "MARK_VALIDATED"; payload: number }
   | { type: "SET_IS_PREVIEWING_ASSETS"; payload: boolean }
   | { type: "SET_ASSET_PREVIEW_ERROR"; payload: string | null }
+  | { type: "SET_IS_XLSX_IMPORT"; payload: boolean }
   | { type: "RESET" };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -432,6 +436,9 @@ function importReducer(state: ImportState, action: ImportAction): ImportState {
 
     case "SET_ASSET_PREVIEW_ERROR":
       return { ...state, assetPreviewError: action.payload };
+
+    case "SET_IS_XLSX_IMPORT":
+      return { ...state, isXlsxImport: action.payload };
 
     case "RESET":
       return { ...INITIAL_STATE };

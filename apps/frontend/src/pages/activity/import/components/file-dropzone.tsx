@@ -264,7 +264,7 @@ export const FileDropzone = ({
                 <p className="text-xs font-medium">
                   <span className="text-primary">Click to upload</span> or drop
                 </p>
-                <p className="text-muted-foreground text-xs">CSV only</p>
+                <p className="text-muted-foreground text-xs">CSV or XLSX</p>
               </motion.div>
             )}
           </AnimatePresence>

@@ -23,6 +23,21 @@ pub struct SyncConfig {
     pub page_limit: i64,
     /// Maximum number of pages to fetch per account (safety limit).
     pub max_pages: usize,
+    /// When set, overrides the sync-state start date for activity fetching.
+    /// Useful for historical imports or re-syncing from a specific date ("YYYY-MM-DD").
+    /// When None with no prior sync state, fetches all available history.
+    pub override_start_date: Option<String>,
+    /// When set, ensures all synced accounts are switched to this tracking mode
+    /// immediately after `sync_accounts` — before the main activity/holdings loop.
+    /// Use `Some(TrackingMode::Transactions)` for brokers that provide activity history.
+    pub force_tracking_mode: Option<TrackingMode>,
+    /// When `true` and no `override_start_date` is set, ignores the stored sync state
+    /// and fetches the full available history (no date filter). Use for user-triggered
+    /// imports where "leave date empty" means "import everything", not "sync incrementally".
+    pub force_full_history: bool,
+    /// When set, overrides the computed end date for activity fetching ("YYYY-MM-DD").
+    /// Defaults to today when not set.
+    pub override_end_date: Option<String>,
 }
 
 impl Default for SyncConfig {
@@ -30,6 +45,10 @@ impl Default for SyncConfig {
         Self {
             page_limit: 1000,
             max_pages: 10_000,
+            override_start_date: None,
+            force_tracking_mode: None,
+            force_full_history: false,
+            override_end_date: None,
         }
     }
 }
@@ -159,6 +178,18 @@ impl<P: SyncProgressReporter> SyncOrchestrator<P> {
             "Accounts synced: {} created, {} updated, {} skipped",
             accounts_result.created, accounts_result.updated, accounts_result.skipped
         );
+
+        // Enforce tracking mode before the sync loop reads each account's mode.
+        if let Some(mode) = self.config.force_tracking_mode {
+            let provider_ids: Vec<String> = sync_enabled_broker_ids.iter().cloned().collect();
+            if let Err(e) = self
+                .sync_service
+                .ensure_tracking_mode(&provider_ids, mode)
+                .await
+            {
+                warn!("Failed to enforce tracking mode for synced accounts: {}", e);
+            }
+        }
 
         // Step 3: Sync data for all synced accounts based on their tracking mode
         // - TRANSACTIONS mode: sync activities
@@ -897,6 +928,22 @@ impl<P: SyncProgressReporter> SyncOrchestrator<P> {
         account_id: &str,
         end_date: chrono::NaiveDate,
     ) -> Result<(Option<String>, Option<String>), String> {
+        let effective_end = self
+            .config
+            .override_end_date
+            .clone()
+            .unwrap_or_else(|| end_date.format("%Y-%m-%d").to_string());
+
+        // Explicit start date override always wins.
+        if let Some(ref override_date) = self.config.override_start_date {
+            return Ok((Some(override_date.clone()), Some(effective_end)));
+        }
+
+        // User requested full history — skip the stored sync state.
+        if self.config.force_full_history {
+            return Ok((None, Some(effective_end)));
+        }
+
         let sync_state = self
             .sync_service
             .get_activity_sync_state(account_id)
@@ -910,7 +957,7 @@ impl<P: SyncProgressReporter> SyncOrchestrator<P> {
         if let Some(d) = from_state {
             return Ok((
                 Some(d.format("%Y-%m-%d").to_string()),
-                Some(end_date.format("%Y-%m-%d").to_string()),
+                Some(effective_end),
             ));
         }
 

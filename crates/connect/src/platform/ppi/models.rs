@@ -15,6 +15,7 @@ pub struct PpiLoginResponse {
 
 #[derive(Debug, Serialize)]
 pub struct PpiRefreshRequest {
+    #[serde(rename = "refreshToken")]
     pub refresh_token: String,
 }
 

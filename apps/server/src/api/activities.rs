@@ -11,7 +11,7 @@ use wealthfolio_core::activities::{
     import_type, Activity, ActivityBulkMutationRequest, ActivityBulkMutationResult, ActivityImport,
     ActivitySearchResponse, ActivityUpdate, ImportActivitiesResult, ImportAssetCandidate,
     ImportAssetPreviewItem, ImportMappingData, ImportTemplateData, NewActivity, ParseConfig,
-    ParsedCsvResult,
+    ParsedCsvResult, ParsedXlsxResult,
 };
 
 use super::shared::parse_date_optional;
@@ -385,6 +385,53 @@ async fn parse_csv_endpoint(
     Ok(Json(result))
 }
 
+async fn parse_xlsx_endpoint(
+    mut multipart: Multipart,
+) -> ApiResult<Json<ParsedXlsxResult>> {
+    let mut file_content: Option<Vec<u8>> = None;
+    let mut account_id: Option<String> = None;
+
+    while let Some(field) = multipart.next_field().await.map_err(|e| {
+        crate::error::ApiError::BadRequest(format!("Failed to read multipart field: {}", e))
+    })? {
+        let name = field.name().unwrap_or("").to_string();
+        match name.as_str() {
+            "file" => {
+                file_content = Some(
+                    field
+                        .bytes()
+                        .await
+                        .map_err(|e| {
+                            crate::error::ApiError::BadRequest(format!(
+                                "Failed to read file content: {}",
+                                e
+                            ))
+                        })?
+                        .to_vec(),
+                );
+            }
+            "accountId" => {
+                let bytes = field.bytes().await.map_err(|e| {
+                    crate::error::ApiError::BadRequest(format!("Failed to read accountId: {}", e))
+                })?;
+                let s = String::from_utf8_lossy(&bytes).trim().to_string();
+                if !s.is_empty() {
+                    account_id = Some(s);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let content = file_content.ok_or_else(|| {
+        crate::error::ApiError::BadRequest("Missing file in multipart request".to_string())
+    })?;
+
+    let result = wealthfolio_core::activities::parse_xlsx(&content, account_id)
+        .map_err(|e| crate::error::ApiError::BadRequest(e))?;
+    Ok(Json(result))
+}
+
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/activities/search", post(search_activities))
@@ -400,6 +447,7 @@ pub fn router() -> Router<Arc<AppState>> {
         )
         .route("/activities/import", post(import_activities))
         .route("/activities/import/parse", post(parse_csv_endpoint))
+        .route("/activities/import/parse-xlsx", post(parse_xlsx_endpoint))
         .route(
             "/activities/import/mapping",
             get(get_account_import_mapping).post(save_account_import_mapping),

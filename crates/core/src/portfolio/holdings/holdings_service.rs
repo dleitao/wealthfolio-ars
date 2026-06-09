@@ -989,6 +989,10 @@ mod tests {
         ) -> Result<EnsureAssetsResult> {
             unimplemented!("unused in holdings service tests")
         }
+
+        async fn enrich_xbue_sectors(&self) -> Result<(usize, usize)> {
+            Ok((0, 0))
+        }
     }
 
     struct MockSnapshotService {

@@ -494,6 +494,15 @@ diesel::joinable!(goals_allocation -> accounts (account_id));
 diesel::joinable!(goal_plans -> goals (goal_id));
 diesel::joinable!(goals_allocation -> goals (goal_id));
 diesel::joinable!(import_runs -> accounts (account_id));
+diesel::table! {
+    inflation_monthly (period) {
+        period -> Text,
+        monthly_rate -> Double,
+        source -> Text,
+        fetched_at -> Text,
+    }
+}
+
 diesel::joinable!(quotes -> assets (asset_id));
 diesel::joinable!(taxonomy_categories -> taxonomies (taxonomy_id));
 
@@ -531,6 +540,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     sync_entity_metadata,
     sync_outbox,
     sync_table_state,
+    inflation_monthly,
     taxonomies,
     taxonomy_categories,
 );

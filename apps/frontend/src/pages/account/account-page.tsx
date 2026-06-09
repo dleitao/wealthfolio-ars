@@ -30,6 +30,7 @@ import { canAddHoldings } from "@/lib/activity-restrictions";
 import { AccountType, HoldingType } from "@/lib/constants";
 import { QueryKeys } from "@/lib/query-keys";
 import { useSettingsContext } from "@/lib/settings-provider";
+import { useCurrencyConversion } from "@/hooks/use-currency-conversion";
 import {
   Account,
   AccountValuation,
@@ -110,6 +111,7 @@ const INITIAL_INTERVAL_CODE: TimePeriod = "3M";
 const AccountPage = () => {
   const { settings } = useSettingsContext();
   const baseCurrency = settings?.baseCurrency ?? "USD";
+  const { convert, displayCurrencyCode } = useCurrencyConversion();
   const { id = "" } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [dateRange, setDateRange] = useState<DateRange | undefined>(getInitialDateRange());
@@ -557,16 +559,16 @@ const AccountPage = () => {
                         <div>
                           <p className="pt-3 text-xl font-bold">
                             <PrivacyAmount
-                              value={currentValuation?.totalValue ?? 0}
-                              currency={account?.currency ?? baseCurrency}
+                              value={convert(currentValuation?.totalValue ?? 0, account?.currency ?? baseCurrency) ?? currentValuation?.totalValue ?? 0}
+                              currency={displayCurrencyCode()}
                             />
                           </p>
                           {!hasPerformanceError && (
                             <div className="flex items-center gap-2 text-sm">
                               <GainAmount
                                 className="text-sm font-light"
-                                value={frontendGainLossAmount}
-                                currency={account?.currency ?? baseCurrency}
+                                value={convert(frontendGainLossAmount, account?.currency ?? baseCurrency) ?? frontendGainLossAmount}
+                                currency={displayCurrencyCode()}
                                 displayCurrency={false}
                               />
                               <GainPercent

@@ -3,6 +3,7 @@ import { MobileLoadingIndicator } from "@/components/mobile-loading-indicator";
 import { Toaster } from "@/components/sonner";
 import { UpdateDialog } from "@/components/update-dialog";
 import { PortfolioSyncProvider } from "@/context/portfolio-sync-context";
+import { DisplayCurrencyProvider } from "@/context/display-currency-context";
 import { useActiveAppSyncTrigger } from "@/features/devices-sync/hooks/use-active-app-sync-trigger";
 import useNavigationEventListener from "@/hooks/use-navigation-event-listener";
 import { useIsMobileViewport, usePlatform } from "@/hooks/use-platform";
@@ -110,11 +111,13 @@ const AppLayoutContent = () => {
 
 const AppLayout = () => {
   return (
-    <PortfolioSyncProvider>
-      <NavigationModeProvider>
-        <AppLayoutContent />
-      </NavigationModeProvider>
-    </PortfolioSyncProvider>
+    <DisplayCurrencyProvider>
+      <PortfolioSyncProvider>
+        <NavigationModeProvider>
+          <AppLayoutContent />
+        </NavigationModeProvider>
+      </PortfolioSyncProvider>
+    </DisplayCurrencyProvider>
   );
 };
 

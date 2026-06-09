@@ -34,6 +34,16 @@ pub trait FxRepositoryTrait: Send + Sync {
         to_currency: &str,
         source: &str,
     ) -> Result<String>;
+
+    /// Bulk-upsert historical quotes for a given FX asset (identified by UUID).
+    /// `from_currency` is the asset's base currency (used as the `currency` field in each row).
+    async fn add_quotes_batch(
+        &self,
+        asset_id: &str,
+        from_currency: &str,
+        quotes: Vec<(NaiveDate, Decimal)>,
+        source: &str,
+    ) -> Result<usize>;
 }
 
 /// Trait defining the contract for FX service operations.
@@ -86,4 +96,15 @@ pub trait FxServiceTrait: Send + Sync {
     /// Registers multiple FX pairs in batch.
     /// Pairs are (from_currency, to_currency).
     async fn ensure_fx_pairs(&self, pairs: Vec<(String, String)>) -> Result<()>;
+
+    /// Bulk-save historical per-date exchange rates for a currency pair.
+    /// Creates the FX asset if needed, then upserts all provided quotes.
+    /// Does NOT reinitialize the in-memory converter — call `initialize` once after.
+    async fn save_historical_fx_quotes(
+        &self,
+        from_currency: &str,
+        to_currency: &str,
+        quotes: Vec<(NaiveDate, Decimal)>,
+        source: &str,
+    ) -> Result<usize>;
 }

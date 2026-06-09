@@ -293,15 +293,18 @@ impl BrokerApiClient for PpiApiClient {
         let token = self.get_access_token().await?;
         let url = self.api_url("Account/Movements");
 
+        // PPI only returns recent movements when dateFrom is omitted.
+        // Fall back to a far-past date so a full-history request actually returns everything.
+        let default_from = "2010-01-01";
+        let effective_from = start_date.unwrap_or(default_from);
+
         let mut req = self
             .client
             .get(&url)
             .headers(self.auth_headers(&token))
-            .query(&[("accountNumber", account_id)]);
+            .query(&[("accountNumber", account_id)])
+            .query(&[("dateFrom", effective_from)]);
 
-        if let Some(from) = start_date {
-            req = req.query(&[("dateFrom", from)]);
-        }
         if let Some(to) = end_date {
             req = req.query(&[("dateTo", to)]);
         }

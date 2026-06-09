@@ -15,6 +15,7 @@ import { useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { type NavLink, type NavigationProps, isPathActive } from "./app-navigation";
 import { ConnectNavItem } from "./connect-nav-item";
+import { DisplayCurrencySelector } from "@/components/display-currency-selector";
 
 interface AppSidebarProps {
   navigation: NavigationProps;
@@ -130,6 +131,9 @@ export function AppSidebar({ navigation }: AppSidebarProps) {
                 <NavItem key={item.title} item={item} collapsed={collapsed} />
               ))}
               <ConnectNavItem collapsed={collapsed} />
+              <div className={cn("flex px-1 py-1", collapsed ? "justify-center" : "justify-start")}>
+                <DisplayCurrencySelector />
+              </div>
               {isWeb && requiresAuth && (
                 <Button
                   type="button"

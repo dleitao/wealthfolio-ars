@@ -17,6 +17,7 @@ import { TickerAvatar } from "@/components/ticker-avatar";
 import { Skeleton } from "@wealthfolio/ui/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@wealthfolio/ui/components/ui/tooltip";
 import { useBalancePrivacy } from "@/hooks/use-balance-privacy";
+import { useCurrencyConversion } from "@/hooks/use-currency-conversion";
 import { useSettingsContext } from "@/lib/settings-provider";
 import { Holding } from "@/lib/types";
 import { AmountDisplay, QuantityDisplay } from "@wealthfolio/ui";
@@ -64,6 +65,7 @@ export const HoldingsTable = ({
 }) => {
   const { isBalanceHidden } = useBalancePrivacy();
   const { settings } = useSettingsContext();
+  const { convert, displayCurrencyCode } = useCurrencyConversion();
   const [showConvertedValues, setShowConvertedValues] = useState(false);
 
   const baseCurrency = settings?.baseCurrency ?? holdings[0]?.baseCurrency;
@@ -74,6 +76,10 @@ export const HoldingsTable = ({
 
     return holding.localCurrency.toUpperCase() !== baseCurrency.toUpperCase();
   });
+
+  // For single-currency portfolios the toggle is hidden; treat as always "base" mode
+  // so display currency conversion is still applied.
+  const effectiveShowConverted = showConvertedValues || !hasMultipleCurrencies;
 
   if (isLoading) {
     return (
@@ -112,7 +118,7 @@ export const HoldingsTable = ({
     <div className="flex h-full flex-col">
       <DataTable
         data={holdings}
-        columns={getColumns(isBalanceHidden, showConvertedValues, showTotalReturn, onClassify)}
+        columns={getColumns(isBalanceHidden, effectiveShowConverted, showTotalReturn, onClassify, convert, displayCurrencyCode)}
         searchBy="symbol"
         filters={filters}
         showColumnToggle={true}
@@ -173,7 +179,9 @@ const getColumns = (
   isHidden: boolean,
   showConvertedValues: boolean,
   showTotalReturn: boolean,
-  onClassify?: (holding: Holding) => void,
+  onClassify: ((holding: Holding) => void) | undefined,
+  convert: (amount: number, fromCurrency: string) => number | undefined,
+  displayCurrencyCode: () => string,
 ): ColumnDef<Holding>[] => [
   {
     id: "symbol",
@@ -354,11 +362,13 @@ const getColumns = (
     },
     cell: ({ row }) => {
       const holding = row.original;
-      const { value, currency } = getDisplayValueAndCurrency(
+      const { value: rawValue, currency: rawCurrency } = getDisplayValueAndCurrency(
         holding,
         holding.marketValue.base,
         showConvertedValues,
       );
+      const value = showConvertedValues ? (convert(rawValue, rawCurrency) ?? rawValue) : rawValue;
+      const currency = showConvertedValues ? displayCurrencyCode() : rawCurrency;
 
       return (
         <div className="flex min-h-[40px] flex-col items-end justify-center px-4">
@@ -397,11 +407,13 @@ const getColumns = (
       const valueBase = showTotalReturn ? holding.totalGain?.base : holding.dayChange?.base;
       const pct = showTotalReturn ? holding.totalGainPct : holding.dayChangePct;
 
-      const { value, currency } = getDisplayValueAndCurrency(
+      const { value: rawValue, currency: rawCurrency } = getDisplayValueAndCurrency(
         holding,
         valueBase,
         showConvertedValues,
       );
+      const value = showConvertedValues ? (convert(rawValue, rawCurrency) ?? rawValue) : rawValue;
+      const currency = showConvertedValues ? displayCurrencyCode() : rawCurrency;
 
       return (
         <div className="flex min-h-[40px] flex-col items-end justify-center px-4">

@@ -2,6 +2,7 @@ import { Card } from "@wealthfolio/ui/components/ui/card";
 import { Skeleton } from "@wealthfolio/ui/components/ui/skeleton";
 import { useBalancePrivacy } from "@/hooks/use-balance-privacy";
 import { useSettingsContext } from "@/lib/settings-provider";
+import { useCurrencyConversion } from "@/hooks/use-currency-conversion";
 import { Holding } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { AmountDisplay } from "@wealthfolio/ui";
@@ -20,12 +21,17 @@ export const CashHoldingsWidget = ({
 }: CashHoldingsWidgetProps) => {
   const { isBalanceHidden } = useBalancePrivacy();
   const { settings } = useSettingsContext();
+  const { convert, displayCurrencyCode } = useCurrencyConversion();
 
   const totalCashInBase = useMemo(() => {
     return cashHoldings.reduce((sum, holding) => {
       return sum + Number(holding.marketValue?.base ?? 0);
     }, 0);
   }, [cashHoldings]);
+
+  const sourceCurrency = settings?.baseCurrency ?? "USD";
+  const displayedTotal = convert(totalCashInBase, sourceCurrency) ?? totalCashInBase;
+  const displayCurrency = displayCurrencyCode();
 
   if (isLoading) {
     return (
@@ -64,8 +70,8 @@ export const CashHoldingsWidget = ({
             </p>
             <p className="text-foreground mt-0.5 text-base font-semibold tracking-tight sm:text-base">
               <AmountDisplay
-                value={totalCashInBase}
-                currency={settings?.baseCurrency ?? "USD"}
+                value={displayedTotal}
+                currency={displayCurrency}
                 isHidden={isBalanceHidden}
               />
             </p>

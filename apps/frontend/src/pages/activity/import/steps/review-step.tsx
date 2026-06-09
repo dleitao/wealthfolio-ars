@@ -293,8 +293,8 @@ export function ReviewStep() {
     );
   }
 
-  // Show error if no data
-  if (parsedRows.length === 0) {
+  // Show error if no data (XLSX imports have draftActivities but no parsedRows — that's fine)
+  if (parsedRows.length === 0 && draftActivities.length === 0) {
     return (
       <ImportAlert
         variant="destructive"
@@ -304,8 +304,8 @@ export function ReviewStep() {
     );
   }
 
-  // Show error if no mapping
-  if (!mapping || Object.keys(mapping.fieldMappings).length === 0) {
+  // Show error if no mapping (skip for XLSX imports — drafts are already built)
+  if (draftActivities.length === 0 && (!mapping || Object.keys(mapping.fieldMappings).length === 0)) {
     return (
       <ImportAlert
         variant="warning"

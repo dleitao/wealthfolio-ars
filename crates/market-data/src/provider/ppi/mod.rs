@@ -219,106 +219,122 @@ impl PpiMarketDataProvider {
     }
 
     /// Try instrument types in order, returning the first successful price and the matched type.
+    /// Retries once with a fresh token on 401.
     async fn fetch_current(&self, ticker: &str) -> Result<(PpiQuote, &'static str), MarketDataError> {
-        let token = self.get_token().await?;
         let url = self.api_url("MarketData/Current");
-        let types = INSTRUMENT_TYPES;
+        let mut retried = false;
 
-        let mut last_err = ppi_err(format!("No type matched for {}", ticker));
+        'token_loop: loop {
+            let token = self.get_token().await?;
+            let mut last_err = ppi_err(format!("No type matched for {}", ticker));
 
-        for &instrument_type in types {
-            let resp = self
-                .client
-                .get(&url)
-                .headers(self.auth_headers(&token))
-                .query(&[("Ticker", ticker), ("Type", instrument_type), ("Settlement", SETTLEMENT)])
-                .send()
-                .await
-                .map_err(|e| ppi_err(format!("Current price request failed: {}", e)))?;
+            for &instrument_type in INSTRUMENT_TYPES {
+                let resp = self
+                    .client
+                    .get(&url)
+                    .headers(self.auth_headers(&token))
+                    .query(&[("Ticker", ticker), ("Type", instrument_type), ("Settlement", SETTLEMENT)])
+                    .send()
+                    .await
+                    .map_err(|e| ppi_err(format!("Current price request failed: {}", e)))?;
 
-            if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
-                self.invalidate_token().await;
-                return Err(ppi_err("Unauthorized — token expired, retry".to_string()));
+                if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
+                    self.invalidate_token().await;
+                    if !retried {
+                        retried = true;
+                        warn!("[PPI] 401 on current price for {}; re-logging in and retrying", ticker);
+                        continue 'token_loop;
+                    }
+                    return Err(ppi_err("Unauthorized after token refresh".to_string()));
+                }
+
+                let body: serde_json::Value = resp
+                    .json()
+                    .await
+                    .map_err(|e| ppi_err(format!("Current price parse error: {}", e)))?;
+
+                // PPI returns {"error": "..."} or {"date": ..., "price": ...}
+                if body.get("error").is_none() {
+                    let quote = serde_json::from_value(body)
+                        .map_err(|e| ppi_err(format!("Current price deserialize error: {}", e)))?;
+                    return Ok((quote, instrument_type));
+                }
+                last_err = ppi_err(body["error"].as_str().unwrap_or("unknown error").to_string());
             }
 
-            let body: serde_json::Value = resp
-                .json()
-                .await
-                .map_err(|e| ppi_err(format!("Current price parse error: {}", e)))?;
-
-            // PPI returns {"error": "..."} or {"date": ..., "price": ...}
-            if body.get("error").is_none() {
-                let quote = serde_json::from_value(body)
-                    .map_err(|e| ppi_err(format!("Current price deserialize error: {}", e)))?;
-                return Ok((quote, instrument_type));
-            }
-            last_err = ppi_err(body["error"].as_str().unwrap_or("unknown error").to_string());
+            return Err(last_err);
         }
-
-        Err(last_err)
     }
 
+    /// Retries once with a fresh token on 401.
     async fn fetch_historical(
         &self,
         ticker: &str,
         from: NaiveDate,
         to: NaiveDate,
     ) -> Result<(Vec<PpiQuote>, &'static str), MarketDataError> {
-        let token = self.get_token().await?;
         let url = self.api_url("MarketData/Search");
         let date_from = from.format("%Y-%m-%dT00:00:00").to_string();
         let date_to = to.format("%Y-%m-%dT23:59:59").to_string();
-        let types = INSTRUMENT_TYPES;
+        let mut retried = false;
 
-        let mut last_err = ppi_err(format!("No type matched for {}", ticker));
+        'token_loop: loop {
+            let token = self.get_token().await?;
+            let mut last_err = ppi_err(format!("No type matched for {}", ticker));
 
-        for &instrument_type in types {
-            let resp = self
-                .client
-                .get(&url)
-                .headers(self.auth_headers(&token))
-                .query(&[
-                    ("Ticker", ticker),
-                    ("Type", instrument_type),
-                    ("Settlement", SETTLEMENT),
-                    ("DateFrom", &date_from),
-                    ("DateTo", &date_to),
-                ])
-                .send()
-                .await
-                .map_err(|e| ppi_err(format!("Historical request failed: {}", e)))?;
+            for &instrument_type in INSTRUMENT_TYPES {
+                let resp = self
+                    .client
+                    .get(&url)
+                    .headers(self.auth_headers(&token))
+                    .query(&[
+                        ("Ticker", ticker),
+                        ("Type", instrument_type),
+                        ("Settlement", SETTLEMENT),
+                        ("DateFrom", &date_from),
+                        ("DateTo", &date_to),
+                    ])
+                    .send()
+                    .await
+                    .map_err(|e| ppi_err(format!("Historical request failed: {}", e)))?;
 
-            if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
-                self.invalidate_token().await;
-                return Err(ppi_err("Unauthorized — token expired".to_string()));
-            }
-
-            let text = resp
-                .text()
-                .await
-                .map_err(|e| ppi_err(format!("Historical read error: {}", e)))?;
-
-            let body: serde_json::Value = match serde_json::from_str(&text) {
-                Ok(v) => v,
-                Err(_) => {
-                    // Non-JSON response (e.g. HTML error page) for this instrument type — try next
-                    last_err = ppi_err(format!("Historical parse error: not JSON for type={}", instrument_type));
-                    continue;
+                if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
+                    self.invalidate_token().await;
+                    if !retried {
+                        retried = true;
+                        warn!("[PPI] 401 on historical for {}; re-logging in and retrying", ticker);
+                        continue 'token_loop;
+                    }
+                    return Err(ppi_err("Unauthorized after token refresh".to_string()));
                 }
-            };
 
-            // Error response is an object {"error": "..."}, success is an array [...]
-            if body.is_array() {
-                let quotes = serde_json::from_value(body)
-                    .map_err(|e| ppi_err(format!("Historical deserialize error: {}", e)))?;
-                return Ok((quotes, instrument_type));
+                let text = resp
+                    .text()
+                    .await
+                    .map_err(|e| ppi_err(format!("Historical read error: {}", e)))?;
+
+                let body: serde_json::Value = match serde_json::from_str(&text) {
+                    Ok(v) => v,
+                    Err(_) => {
+                        // Non-JSON response (e.g. HTML error page) — try next instrument type
+                        last_err = ppi_err(format!("Historical parse error: not JSON for type={}", instrument_type));
+                        continue;
+                    }
+                };
+
+                // Error response is an object {"error": "..."}, success is an array [...]
+                if body.is_array() {
+                    let quotes = serde_json::from_value(body)
+                        .map_err(|e| ppi_err(format!("Historical deserialize error: {}", e)))?;
+                    return Ok((quotes, instrument_type));
+                }
+                if let Some(err) = body.get("error") {
+                    last_err = ppi_err(err.as_str().unwrap_or("unknown error").to_string());
+                }
             }
-            if let Some(err) = body.get("error") {
-                last_err = ppi_err(err.as_str().unwrap_or("unknown error").to_string());
-            }
+
+            return Err(last_err);
         }
-
-        Err(last_err)
     }
 }
 

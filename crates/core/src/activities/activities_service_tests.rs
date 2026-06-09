@@ -219,6 +219,10 @@ mod tests {
 
             Ok(result)
         }
+
+        async fn enrich_xbue_sectors(&self) -> Result<(usize, usize)> {
+            Ok((0, 0))
+        }
     }
 
     // --- Mock FxService ---
@@ -335,6 +339,15 @@ mod tests {
                 registered.insert((from, to));
             }
             Ok(())
+        }
+        async fn save_historical_fx_quotes(
+            &self,
+            _from_currency: &str,
+            _to_currency: &str,
+            _quotes: Vec<(chrono::NaiveDate, Decimal)>,
+            _source: &str,
+        ) -> Result<usize> {
+            Ok(0)
         }
     }
 

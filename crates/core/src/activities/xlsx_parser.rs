@@ -21,7 +21,7 @@ pub struct ParsedXlsxResult {
 /// Parse an XLSX file from raw bytes.
 ///
 /// Auto-detects the broker format by inspecting sheet names:
-/// - Sheet "movimientos" → Balanz
+/// - Sheet "movimientos" (or containing Balanz column headers) → Balanz
 /// - Sheet "Instrumentos" → PPI
 pub fn parse_xlsx(content: &[u8], account_id: Option<String>) -> Result<ParsedXlsxResult, String> {
     let cursor = Cursor::new(content.to_vec());
@@ -30,39 +30,68 @@ pub fn parse_xlsx(content: &[u8], account_id: Option<String>) -> Result<ParsedXl
 
     let sheet_names = wb.sheet_names().to_owned();
 
-    let format = detect_format(&sheet_names);
+    // Read all sheets upfront so we can inspect headers for fallback detection.
+    let mut all_sheets: Vec<(String, Vec<Vec<String>>)> = sheet_names
+        .iter()
+        .filter_map(|name| read_sheet(&mut wb, name).ok().map(|rows| (name.clone(), rows)))
+        .collect();
+
+    let format = detect_format(&sheet_names, &all_sheets);
 
     match format.as_str() {
         "BALANZ" => {
-            let rows = read_sheet(&mut wb, "movimientos")?;
+            // Find the sheet: by name first, then by header content.
+            let rows = all_sheets
+                .iter()
+                .find(|(name, _)| name.to_uppercase() == "MOVIMIENTOS")
+                .or_else(|| all_sheets.iter().find(|(_, rows)| is_balanz_sheet(rows)))
+                .map(|(_, rows)| rows.clone())
+                .unwrap_or_default();
             let (activities, errors) = parse_balanz(&rows, account_id);
             Ok(ParsedXlsxResult { format, activities, errors })
         }
         "PPI" => {
-            let mut sheets = Vec::new();
-            for name in &sheet_names {
-                if let Ok(rows) = read_sheet(&mut wb, name) {
-                    sheets.push((name.clone(), rows));
-                }
-            }
+            let sheets: Vec<(String, Vec<Vec<String>>)> = all_sheets.drain(..).collect();
             let (activities, errors) = parse_ppi_xlsx(&sheets, account_id);
             Ok(ParsedXlsxResult { format, activities, errors })
         }
-        _ => Ok(ParsedXlsxResult {
-            format,
-            activities: vec![],
-            errors: vec!["Unrecognized XLSX format. Expected Balanz or PPI format.".to_string()],
-        }),
+        _ => {
+            let names_list = sheet_names.join(", ");
+            Ok(ParsedXlsxResult {
+                format,
+                activities: vec![],
+                errors: vec![format!(
+                    "Formato XLSX no reconocido. Hojas encontradas: [{}]. Se esperaba una hoja 'movimientos' (Balanz) o 'Instrumentos' (PPI).",
+                    names_list
+                )],
+            })
+        }
     }
 }
 
-fn detect_format(sheet_names: &[String]) -> String {
+/// Check if a sheet looks like a Balanz "movimientos" sheet by inspecting header columns.
+fn is_balanz_sheet(rows: &[Vec<String>]) -> bool {
+    if let Some(header) = rows.first() {
+        let headers_upper: Vec<String> = header.iter().map(|h| h.trim().to_uppercase()).collect();
+        // Balanz columns: Descripcion, Ticker, Tipo Instrumento, Concertacion, Cantidad, Precio, Moneda, Importe
+        let required = ["DESCRIPCION", "TICKER", "CANTIDAD", "PRECIO", "MONEDA", "IMPORTE"];
+        required.iter().all(|col| headers_upper.iter().any(|h| h.contains(col)))
+    } else {
+        false
+    }
+}
+
+fn detect_format(sheet_names: &[String], sheets: &[(String, Vec<Vec<String>>)]) -> String {
     let names_upper: Vec<String> = sheet_names.iter().map(|s| s.to_uppercase()).collect();
     if names_upper.iter().any(|n| n == "MOVIMIENTOS") {
         return "BALANZ".to_string();
     }
     if names_upper.iter().any(|n| n == "INSTRUMENTOS") {
         return "PPI".to_string();
+    }
+    // Fallback: detect Balanz by column headers in any sheet
+    if sheets.iter().any(|(_, rows)| is_balanz_sheet(rows)) {
+        return "BALANZ".to_string();
     }
     "UNKNOWN".to_string()
 }

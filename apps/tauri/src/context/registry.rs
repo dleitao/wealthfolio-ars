@@ -5,7 +5,7 @@ use wealthfolio_core::{
     self, accounts, activities,
     assets::{self, AlternativeAssetServiceTrait},
     events::DomainEventSink,
-    fx, goals, health, limits, portfolio, quotes, settings, taxonomies,
+    fx, goals, health, inflation::InflationService, limits, portfolio, quotes, settings, taxonomies,
 };
 use wealthfolio_device_sync::{engine::DeviceSyncRuntimeState, DeviceEnrollService};
 use wealthfolio_storage_sqlite::{
@@ -56,6 +56,7 @@ pub struct ServiceContext {
     pub device_sync_runtime: Arc<DeviceSyncRuntimeState>,
     pub health_service: Arc<health::HealthService>,
     pub custom_provider_service: Arc<wealthfolio_core::custom_provider::CustomProviderService>,
+    pub inflation_service: Arc<InflationService>,
 }
 
 impl ServiceContext {
@@ -177,5 +178,15 @@ impl ServiceContext {
 
     pub fn health_service(&self) -> Arc<health::HealthService> {
         Arc::clone(&self.health_service)
+    }
+
+    pub fn inflation_service(&self) -> Arc<InflationService> {
+        Arc::clone(&self.inflation_service)
+    }
+
+    pub fn custom_provider_service(
+        &self,
+    ) -> Arc<wealthfolio_core::custom_provider::CustomProviderService> {
+        Arc::clone(&self.custom_provider_service)
     }
 }

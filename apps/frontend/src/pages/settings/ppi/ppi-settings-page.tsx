@@ -22,6 +22,8 @@ export default function PpiSettingsPage() {
   const [isSaving, setIsSaving] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState(() => new Date().toISOString().slice(0, 10));
 
   useEffect(() => {
     getPpiCredentialsStatus()
@@ -53,7 +55,7 @@ export default function PpiSettingsPage() {
   const handleSync = async () => {
     setIsSyncing(true);
     try {
-      await syncPpiData();
+      await syncPpiData(startDate || undefined, endDate || undefined);
       toast({ title: "Sincronización iniciada", description: "Revisá las actividades cuando termine." });
     } catch (e) {
       toast({ title: "Error de sincronización", description: `${e}` });
@@ -161,11 +163,34 @@ export default function PpiSettingsPage() {
         </div>
 
         {isConfigured && (
-          <div className="space-y-2 rounded-lg border p-4">
+          <div className="space-y-4 rounded-lg border p-4">
             <p className="text-muted-foreground text-sm">
               Sincronizá actividades y posiciones desde PPI. La sincronización corre en segundo
               plano y emite eventos al completarse.
             </p>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1">
+                <Label htmlFor="ppi-start-date">Desde (opcional)</Label>
+                <Input
+                  id="ppi-start-date"
+                  type="date"
+                  value={startDate}
+                  onChange={(e) => setStartDate(e.target.value)}
+                />
+                <p className="text-muted-foreground text-xs">
+                  Vacío trae solo lo reciente.
+                </p>
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="ppi-end-date">Hasta</Label>
+                <Input
+                  id="ppi-end-date"
+                  type="date"
+                  value={endDate}
+                  onChange={(e) => setEndDate(e.target.value)}
+                />
+              </div>
+            </div>
             <Button variant="outline" onClick={handleSync} disabled={isSyncing}>
               {isSyncing ? (
                 <Icons.Spinner className="mr-2 size-4 animate-spin" />

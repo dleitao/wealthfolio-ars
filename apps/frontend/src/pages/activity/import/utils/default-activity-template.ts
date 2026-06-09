@@ -4,6 +4,16 @@ import { ImportType } from "@/lib/types";
 import type { ParseConfig } from "../context";
 
 export const DEFAULT_ACTIVITY_TEMPLATE_ID = "system_default_activity";
+export const BALANZ_XLSX_TEMPLATE_ID = "system_balanz_xlsx";
+export const PPI_XLSX_TEMPLATE_ID = "system_ppi_xlsx";
+
+export function isXlsxBrokerTemplateId(id: string | null): boolean {
+  return id === BALANZ_XLSX_TEMPLATE_ID;
+}
+
+export function isPpiXlsxTemplateId(id: string | null): boolean {
+  return id === PPI_XLSX_TEMPLATE_ID;
+}
 
 export function createDefaultParseConfig(defaultCurrency = "USD"): ParseConfig {
   return {
@@ -68,12 +78,47 @@ export function createEmptyHoldingsMapping(accountId = ""): ImportMappingData {
   };
 }
 
+export function createBalanzXlsxTemplate(): ImportTemplateData {
+  return {
+    id: BALANZ_XLSX_TEMPLATE_ID,
+    name: "Balanz XLSX",
+    scope: "SYSTEM",
+    kind: ImportType.ACTIVITY,
+    fieldMappings: {},
+    activityMappings: {},
+    symbolMappings: {},
+    accountMappings: {},
+    symbolMappingMeta: {},
+  };
+}
+
+export function createPpiXlsxTemplate(): ImportTemplateData {
+  return {
+    id: PPI_XLSX_TEMPLATE_ID,
+    name: "PPI XLSX",
+    scope: "SYSTEM",
+    kind: ImportType.ACTIVITY,
+    fieldMappings: {},
+    activityMappings: {},
+    symbolMappings: {},
+    accountMappings: {},
+    symbolMappingMeta: {},
+  };
+}
+
 export function prependDefaultActivityTemplate(
   templates: ImportTemplateData[],
 ): ImportTemplateData[] {
   return [
     createDefaultActivityTemplate(),
-    ...templates.filter((template) => template.id !== DEFAULT_ACTIVITY_TEMPLATE_ID),
+    createBalanzXlsxTemplate(),
+    createPpiXlsxTemplate(),
+    ...templates.filter(
+      (template) =>
+        template.id !== DEFAULT_ACTIVITY_TEMPLATE_ID &&
+        template.id !== BALANZ_XLSX_TEMPLATE_ID &&
+        template.id !== PPI_XLSX_TEMPLATE_ID,
+    ),
   ];
 }
 

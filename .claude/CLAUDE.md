@@ -1,17 +1,68 @@
 ## Project Overview
 
-Wealthfolio - Desktop investment tracker with local-first data. React + Vite
-frontend, Tauri/Rust backend, SQLite storage.
+Wealthfolio — local-first desktop investment tracker. AGPL-3.0. Fork with
+Argentine broker/market-data support (PPI, Balanz, DolarApi, ArgentinaDatos).
 
-Key directories:
+Two runtime targets from the same codebase:
 
-- `apps/frontend/` — React app (pages, components, commands, hooks)
-- `apps/tauri/` — Tauri desktop/mobile app (IPC commands)
-- `apps/server/` — Axum HTTP server (web mode)
-- `crates/` — Rust crates (core logic, storage, market-data, connect,
-  device-sync)
-- `packages/` — Shared TS packages (addon-sdk, ui, addon-dev-tools)
-- `addons/` — Distributable addon plugins
+- **Desktop**: Tauri v2 + Rust backend, SQLite on disk, IPC over Tauri commands
+- **Web**: Axum HTTP server, SQLite, REST API
+
+## Stack
+
+| Layer | Technology |
+|---|---|
+| Frontend | React 18 + Vite + TypeScript, React Router, TanStack Query |
+| UI components | shadcn/ui (Radix + Tailwind) |
+| Desktop shell | Tauri v2 (Rust) |
+| Web server | Axum (Rust) |
+| Business logic | Rust workspace crates |
+| Storage | SQLite via Diesel ORM + r2d2 pool |
+| Numbers | `rust_decimal` (never `f64` for monetary values) |
+| Async | Tokio |
+| AI | `rig-core`, streaming `AiStreamEvent` |
+| Monorepo tooling | pnpm workspaces |
+
+## Main Modules
+
+```
+apps/
+  frontend/       React SPA — shared by both targets via adapter injection
+  tauri/          Tauri shell — commands/, context/, scheduler/, listeners/
+  server/         Axum HTTP server — api.rs registers all routes
+
+crates/
+  core/           Domain: entities, service traits, business rules (DB-agnostic)
+  storage-sqlite/ Diesel repositories — only crate allowed to import Diesel
+  market-data/    Provider-agnostic market data (Yahoo, AlphaVantage, PPI, …)
+  connect/        Cloud sync: broker ingest, token lifecycle, PPI/Balanz API
+  device-sync/    E2EE multi-device sync via Wealthfolio Connect cloud
+  ai/             AI chat orchestration (rig-core, tools, streaming)
+
+packages/
+  addon-sdk/      Public API for third-party addons
+  ui/             Shared React component library
+  addon-dev-tools/ Addon scaffolding/dev utilities
+
+addons/           First-party addon plugins (goals, fees, swingfolio)
+```
+
+## Design Constraints
+
+- `crates/core` is database-agnostic. It defines traits; `storage-sqlite` implements them. No Diesel in `core`.
+- `unsafe_code = "forbid"` workspace-wide.
+- Monetary values: always `rust_decimal::Decimal`, never `f64`.
+- Frontend adapter pattern: `@/adapters` alias resolves to `adapters/tauri` or `adapters/web` at build time (`BUILD_TARGET` env var). All backend calls go through this interface — never call Tauri IPC or fetch directly in pages.
+- Domain events flow from Rust → frontend via Tauri `emit` / SSE (web). Frontend listens and invalidates queries.
+- Addons can register dynamic routes; the router subscribes to `subscribeToNavigationUpdates`.
+
+## Conventions
+
+- Rust modules follow the pattern: `*_model.rs`, `*_service.rs`, `*_traits.rs` per domain.
+- Repository traits live in `core`; implementations live in `storage-sqlite`.
+- Services in `core` receive trait objects (dependency injection), not concrete DB types.
+- Frontend pages import from `@/adapters`, not directly from `@/adapters/tauri` or `@/adapters/web`.
+- Argentine-specific providers are in `crates/market-data/src/provider/` and `crates/connect/src/platform/`.
 
 ## Quick Commands
 

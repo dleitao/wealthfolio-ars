@@ -1,6 +1,42 @@
 // Web-specific activity commands
-import type { ParseConfig, ParsedCsvResult } from "@/lib/types";
+import type { ParseConfig, ParsedCsvResult, ActivityImport } from "@/lib/types";
 import { API_PREFIX, logger } from "./core";
+
+export interface ParsedXlsxResult {
+  format: string;
+  activities: ActivityImport[];
+  errors: string[];
+}
+
+export const parseXlsx = async (
+  file: File,
+  accountId?: string,
+): Promise<ParsedXlsxResult> => {
+  try {
+    const formData = new FormData();
+    formData.append("file", file);
+    if (accountId) {
+      formData.append("accountId", accountId);
+    }
+
+    const response = await fetch(`${API_PREFIX}/activities/import/parse-xlsx`, {
+      method: "POST",
+      body: formData,
+      credentials: "same-origin",
+    });
+
+    if (!response.ok) {
+      const details = await extractErrorMessage(response);
+      const fallback = `Request failed (${response.status})`;
+      throw new Error(details ? `Failed to parse XLSX: ${details}` : `Failed to parse XLSX: ${fallback}`);
+    }
+
+    return (await response.json()) as ParsedXlsxResult;
+  } catch (err) {
+    logger.error("Error parsing XLSX file:", err);
+    throw err;
+  }
+};
 
 async function extractErrorMessage(response: Response): Promise<string | null> {
   const contentType = response.headers.get("content-type") ?? "";

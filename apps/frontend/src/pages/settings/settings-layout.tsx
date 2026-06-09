@@ -78,6 +78,12 @@ const settingsSections = [
         icon: <Icons.BarChart className="size-5" />,
       },
       {
+        title: "Portfolio Personal (PPI)",
+        href: "ppi",
+        subtitle: "Sincronización de cuenta PPI",
+        icon: <Icons.RefreshCw className="size-5" />,
+      },
+      {
         title: "AI Providers",
         href: "ai-providers",
         subtitle: "Configure AI for portfolio insights",

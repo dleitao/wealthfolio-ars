@@ -1,4 +1,5 @@
 import { useNetWorth, useNetWorthHistory } from "@/hooks/use-alternative-assets";
+import { useCurrencyConversion } from "@/hooks/use-currency-conversion";
 import { useSettingsContext } from "@/lib/settings-provider";
 import type { DateRange } from "@/lib/types";
 import { formatDateISO } from "@/lib/utils";
@@ -90,6 +91,9 @@ interface BalanceSheetProps {
 function BalanceSheet({ data, currency }: BalanceSheetProps) {
   const [assetsOpen, setAssetsOpen] = useState(true);
   const [liabilitiesOpen, setLiabilitiesOpen] = useState(true);
+  const { convert, displayCurrencyCode } = useCurrencyConversion();
+  const c = (v: number) => convert(v, currency) ?? v;
+  const displayCurrency = displayCurrencyCode();
 
   if (!data) return null;
 
@@ -107,7 +111,7 @@ function BalanceSheet({ data, currency }: BalanceSheetProps) {
             <span className="text-sm font-semibold">Assets</span>
           </div>
           <span className="text-success text-sm font-semibold">
-            <PrivacyAmount value={data.assets.total} currency={currency} />
+            <PrivacyAmount value={c(data.assets.total)} currency={displayCurrency} />
           </span>
         </CollapsibleTrigger>
         <CollapsibleContent>
@@ -128,7 +132,7 @@ function BalanceSheet({ data, currency }: BalanceSheetProps) {
                   </span>
                 </div>
                 <span className="text-muted-foreground text-sm">
-                  <PrivacyAmount value={item.value} currency={currency} />
+                  <PrivacyAmount value={c(item.value)} currency={displayCurrency} />
                 </span>
               </div>
             ))}
@@ -147,7 +151,7 @@ function BalanceSheet({ data, currency }: BalanceSheetProps) {
               <span className="text-sm font-semibold">Liabilities</span>
             </div>
             <span className="text-destructive text-sm font-semibold">
-              -<PrivacyAmount value={data.liabilities.total} currency={currency} />
+              -<PrivacyAmount value={c(data.liabilities.total)} currency={displayCurrency} />
             </span>
           </CollapsibleTrigger>
           <CollapsibleContent>
@@ -164,7 +168,7 @@ function BalanceSheet({ data, currency }: BalanceSheetProps) {
                     <span className="text-muted-foreground text-sm">{item.name}</span>
                   </div>
                   <span className="text-muted-foreground text-sm">
-                    -<PrivacyAmount value={item.value} currency={currency} />
+                    -<PrivacyAmount value={c(item.value)} currency={displayCurrency} />
                   </span>
                 </div>
               ))}
@@ -177,7 +181,7 @@ function BalanceSheet({ data, currency }: BalanceSheetProps) {
       <div className="bg-muted/30 flex items-center justify-between border-t px-4 py-3 md:px-5">
         <span className="text-sm font-bold">Net Worth</span>
         <span className="text-sm font-bold">
-          <PrivacyAmount value={data.netWorth} currency={currency} />
+          <PrivacyAmount value={c(data.netWorth)} currency={displayCurrency} />
         </span>
       </div>
     </div>
@@ -386,7 +390,11 @@ export function NetWorthContent({ onAddAsset, onAddLiability }: NetWorthContentP
     return { gainLossAmount: change, gainLossPercent: percent };
   }, [historyData]);
 
-  const currency = netWorthData?.currency || settings?.baseCurrency || "USD";
+  const rawCurrency = netWorthData?.currency || settings?.baseCurrency || "USD";
+  const { convert: convertNW, displayCurrencyCode: displayNWCurrencyCode } = useCurrencyConversion();
+  const currency = displayNWCurrencyCode();
+  const displayedNetWorth = convertNW(parsedData?.netWorth ?? 0, rawCurrency) ?? parsedData?.netWorth ?? 0;
+  const displayedGainLoss = convertNW(gainLossAmount, rawCurrency) ?? gainLossAmount;
   const hasStaleValuations = netWorthData && netWorthData.staleAssets.length > 0;
 
   // Error state
@@ -413,7 +421,7 @@ export function NetWorthContent({ onAddAsset, onAddLiability }: NetWorthContentP
             <div className="flex items-center gap-3">
               <Balance
                 isLoading={isLoading}
-                targetValue={parsedData?.netWorth ?? 0}
+                targetValue={displayedNetWorth}
                 currency={currency}
                 displayCurrency={true}
               />
@@ -456,7 +464,7 @@ export function NetWorthContent({ onAddAsset, onAddLiability }: NetWorthContentP
                 <>
                   <GainAmount
                     className="lg:text-md text-sm font-light"
-                    value={gainLossAmount}
+                    value={displayedGainLoss}
                     currency={currency}
                     displayCurrency={false}
                   />

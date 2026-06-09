@@ -25,6 +25,7 @@ use wealthfolio_core::{
     fx::{FxService, FxServiceTrait},
     goals::{GoalService, GoalServiceTrait},
     health::{HealthService, HealthServiceTrait},
+    inflation::InflationService,
     limits::{ContributionLimitService, ContributionLimitServiceTrait},
     portfolio::allocation::{AllocationService, AllocationServiceTrait},
     portfolio::income::{IncomeService, IncomeServiceTrait},
@@ -48,6 +49,7 @@ use wealthfolio_storage_sqlite::{
     activities::ActivityRepository,
     ai_chat::AiChatRepository,
     assets::{AlternativeAssetRepository, AssetRepository},
+    inflation::InflationRepository,
     db::{self, write_actor},
     fx::FxRepository,
     goals::GoalRepository,
@@ -103,6 +105,7 @@ pub struct AppState {
     pub health_service: Arc<dyn HealthServiceTrait + Send + Sync>,
     pub token_lifecycle: Arc<TokenLifecycleState>,
     pub custom_provider_service: Arc<wealthfolio_core::custom_provider::CustomProviderService>,
+    pub inflation_service: Arc<InflationService>,
 }
 
 pub fn init_tracing() {
@@ -383,6 +386,9 @@ pub async fn build_state(config: &Config) -> anyhow::Result<Arc<AppState>> {
 
     // Connect sync service for broker data synchronization
     let platform_repository = Arc::new(PlatformRepository::new(pool.clone(), writer.clone()));
+    let inflation_repository = Arc::new(InflationRepository::new(pool.clone(), writer.clone()));
+    let inflation_service = Arc::new(InflationService::new(inflation_repository));
+
     let connect_sync_service: Arc<dyn BrokerSyncServiceTrait + Send + Sync> = Arc::new(
         BrokerSyncService::new(
             account_service.clone(),
@@ -531,6 +537,7 @@ pub async fn build_state(config: &Config) -> anyhow::Result<Arc<AppState>> {
         health_service,
         token_lifecycle,
         custom_provider_service,
+        inflation_service,
     });
 
     #[cfg(feature = "device-sync")]

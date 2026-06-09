@@ -38,6 +38,7 @@ pub mod custom_provider;
 pub mod fx;
 pub mod goals;
 pub mod health;
+pub mod inflation;
 pub mod limits;
 pub mod market_data;
 pub mod portfolio;

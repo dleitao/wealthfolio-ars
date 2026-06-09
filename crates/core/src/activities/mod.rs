@@ -5,10 +5,13 @@ mod activities_errors;
 mod activities_model;
 mod activities_service;
 mod activities_traits;
+pub mod balanz_importer;
 mod compiler;
 mod csv_parser;
 mod idempotency;
 mod import_run_model;
+pub mod ppi_xlsx_importer;
+pub mod xlsx_parser;
 
 #[cfg(test)]
 mod activities_service_tests;
@@ -35,6 +38,7 @@ pub use activities_service::ActivityService;
 pub use activities_traits::{ActivityRepositoryTrait, ActivityServiceTrait};
 pub use compiler::{ActivityCompiler, DefaultActivityCompiler};
 pub use csv_parser::{parse_csv, ParseConfig, ParseError, ParsedCsvResult};
+pub use xlsx_parser::{parse_xlsx, ParsedXlsxResult};
 pub use idempotency::{
     compute_activity_idempotency_key, compute_idempotency_key, generate_manual_idempotency_key,
 };

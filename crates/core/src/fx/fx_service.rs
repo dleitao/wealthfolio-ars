@@ -71,6 +71,26 @@ impl FxService {
         }
     }
 
+    /// Add rates to the in-memory converter without reloading from the DB.
+    /// If the converter is not yet initialized, falls back to a full init.
+    fn add_rates_to_converter(&self, rates: Vec<ExchangeRate>) -> Result<()> {
+        let mut lock = self
+            .converter
+            .write()
+            .map_err(|e| FxError::CacheError(e.to_string()))?;
+        match lock.as_mut() {
+            Some(converter) => {
+                converter.add_historical_rates(rates);
+                Ok(())
+            }
+            None => {
+                // Not initialized yet — drop the write lock and do a full init.
+                drop(lock);
+                self.initialize_converter()
+            }
+        }
+    }
+
     fn load_latest_exchange_rate(&self, from: &str, to: &str) -> Result<ExchangeRate> {
         match self.repository.get_latest_exchange_rate(from, to)? {
             Some(rate) => Ok(rate),
@@ -204,7 +224,11 @@ impl FxServiceTrait for FxService {
             timestamp: Utc::now(),
         };
 
-        self.repository.save_exchange_rate(rate).await
+        let saved = self.repository.save_exchange_rate(rate).await?;
+        // Keep the in-memory converter in sync — add the new rate incrementally instead of
+        // reloading all 25K+ historical quotes from the DB on every save.
+        self.add_rates_to_converter(vec![saved.clone()])?;
+        Ok(saved)
     }
 
     fn get_historical_rates(&self, from: &str, to: &str, days: i64) -> Result<Vec<ExchangeRate>> {
@@ -433,13 +457,49 @@ impl FxServiceTrait for FxService {
         }
         Ok(())
     }
+
+    async fn save_historical_fx_quotes(
+        &self,
+        from_currency: &str,
+        to_currency: &str,
+        quotes: Vec<(NaiveDate, Decimal)>,
+        source: &str,
+    ) -> Result<usize> {
+        if quotes.is_empty() {
+            return Ok(0);
+        }
+        let asset_id = self
+            .repository
+            .create_fx_asset(from_currency, to_currency, source)
+            .await?;
+        let count = self
+            .repository
+            .add_quotes_batch(&asset_id, from_currency, quotes.clone(), source)
+            .await?;
+
+        // Update the in-memory converter with the new batch — avoids a full DB reload.
+        let new_rates: Vec<ExchangeRate> = quotes
+            .into_iter()
+            .map(|(date, rate)| ExchangeRate {
+                id: asset_id.clone(),
+                from_currency: from_currency.to_string(),
+                to_currency: to_currency.to_string(),
+                rate,
+                source: source.to_string(),
+                timestamp: date.and_hms_opt(12, 0, 0).unwrap().and_utc(),
+            })
+            .collect();
+        self.add_rates_to_converter(new_rates)?;
+
+        Ok(count)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::quotes::Quote;
-    use chrono::NaiveDateTime;
+    use chrono::{NaiveDate, NaiveDateTime};
     use rust_decimal::Decimal;
     use std::sync::Mutex;
 
@@ -512,6 +572,16 @@ mod tests {
                 source.to_string(),
             ));
             Ok(format!("FX:{}{}", from_currency, to_currency))
+        }
+
+        async fn add_quotes_batch(
+            &self,
+            _asset_id: &str,
+            _from_currency: &str,
+            quotes: Vec<(NaiveDate, Decimal)>,
+            _source: &str,
+        ) -> Result<usize> {
+            Ok(quotes.len())
         }
     }
 

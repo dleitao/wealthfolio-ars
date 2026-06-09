@@ -94,7 +94,8 @@ export {
   searchActivities,
   updateActivity,
 } from "../shared/activities";
-export { parseCsv } from "./activities";
+export { parseCsv, parseXlsx } from "./activities";
+export type { ParsedXlsxResult } from "./activities";
 
 // Goal Commands
 export {
@@ -308,6 +309,17 @@ export {
   runHealthChecks,
   updateHealthConfig,
 } from "../shared/health";
+
+// PPI Broker Commands (web-specific implementation)
+export {
+  savePpiCredentials,
+  deletePpiCredentials,
+  getPpiCredentialsStatus,
+  syncPpiData,
+} from "./ppi";
+
+// Argentina Commands
+export * from "../shared/argentina";
 
 // ============================================================================
 // Platform-specific modules (different implementations for web vs desktop)

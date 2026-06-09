@@ -20,6 +20,7 @@ import {
   prevStep,
   setDraftActivities,
   setMapping,
+  setStep,
   useImportContext,
   type ImportStep,
 } from "./context";
@@ -112,8 +113,13 @@ function useStepValidation(isHoldingsMode: boolean, accounts?: Account[]) {
 
     switch (step) {
       case "upload":
-        // Can proceed if file is uploaded and parsed successfully
-        return file !== null && headers.length > 0 && parsedRows.length > 0;
+        // XLSX imports jump directly to assets step — the "Next" button is not needed
+        // but we still allow proceeding for CSV files (headers + rows required)
+        return (
+          file !== null &&
+          ((headers.length > 0 && parsedRows.length > 0) ||
+            (state.isXlsxImport && state.draftActivities.length > 0))
+        );
 
       case "mapping": {
         if (isHoldingsMode) {
@@ -467,9 +473,14 @@ function ImportWizardContent() {
 
   const handleBack = useCallback(() => {
     if (canGoBack) {
+      // XLSX imports skip the mapping step — go directly from assets back to upload
+      if (state.step === "assets" && state.isXlsxImport) {
+        dispatch(setStep("upload"));
+        return;
+      }
       dispatch(prevStep());
     }
-  }, [dispatch, canGoBack]);
+  }, [dispatch, canGoBack, state.step, state.isXlsxImport]);
 
   const handleCancelClick = useCallback(() => {
     // On first step or result step, just navigate back without confirmation
@@ -489,7 +500,7 @@ function ImportWizardContent() {
   const getNextLabel = useCallback(() => {
     switch (state.step) {
       case "upload":
-        return "Configure Mapping";
+        return state.isXlsxImport ? "Review Assets" : "Configure Mapping";
       case "mapping":
         return "Review Assets";
       case "assets":

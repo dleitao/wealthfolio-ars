@@ -4,6 +4,7 @@ import { useArsFxRates } from "./use-fx-rates";
 
 /**
  * Convert an amount from its native currency to the current display currency.
+ * Returns undefined when rates are unavailable (loading or fetch failed).
  *
  * Conversion table (base = ARS; USD as pivot between ARS variants):
  *   ARS  → ARS:         ×1
@@ -17,31 +18,32 @@ import { useArsFxRates } from "./use-fx-rates";
  */
 export function useCurrencyConversion() {
   const { displayCurrency } = useDisplayCurrency();
-  const { data: rates } = useArsFxRates();
+  const { data: rates, isLoading, isError } = useArsFxRates();
 
   const convert = useCallback(
-    (amount: number, fromCurrency: string): number => {
-      if (!rates || !amount || isNaN(amount)) return amount;
-      const from = fromCurrency?.toUpperCase();
-      const arsOficial = rates.arsOficial || 1;
-      const arsMep = rates.arsMep || 1;
-      const arsCcl = rates.arsCcl || 1;
+    (amount: number, fromCurrency: string): number | undefined => {
+      if (!amount || isNaN(amount)) return amount;
+      if (!rates) return undefined;
 
-      if (from === "ARS" || from === "ARS_OFICIAL" || from === "ARS_MEP") {
+      const from = fromCurrency?.toUpperCase();
+      const { arsOficial, arsMep, arsCcl } = rates;
+
+      if (from === "ARS" || from === "ARS_OFICIAL" || from === "ARS_MEP" || from === "ARS_CCL") {
         if (displayCurrency === "ARS") return amount;
-        if (displayCurrency === "USD_OFICIAL") return amount / arsOficial;
-        if (displayCurrency === "USD_MEP") return amount / arsMep;
-        if (displayCurrency === "USD_CCL") return amount / arsCcl;
+        if (displayCurrency === "USD_OFICIAL") return arsOficial > 0 ? amount / arsOficial : undefined;
+        if (displayCurrency === "USD_MEP") return arsMep > 0 ? amount / arsMep : undefined;
+        if (displayCurrency === "USD_CCL") return arsCcl > 0 ? amount / arsCcl : undefined;
       }
 
       if (from === "USD") {
-        if (displayCurrency === "ARS") return amount * arsMep;
+        if (displayCurrency === "ARS") return arsMep > 0 ? amount * arsMep : undefined;
         if (displayCurrency === "USD_OFICIAL") return amount;
         if (displayCurrency === "USD_MEP") return amount;
         if (displayCurrency === "USD_CCL") return amount;
       }
 
-      return amount;
+      // Currency not handled by this converter (e.g. EUR, GBP)
+      return undefined;
     },
     [displayCurrency, rates],
   );
@@ -54,5 +56,5 @@ export function useCurrencyConversion() {
     return "ARS";
   }, [displayCurrency]);
 
-  return { convert, displayCurrency, displayCurrencyCode };
+  return { convert, displayCurrency, displayCurrencyCode, isLoading, isError };
 }

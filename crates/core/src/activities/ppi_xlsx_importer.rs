@@ -105,7 +105,14 @@ pub fn parse_ppi_xlsx(
                 continue;
             }
             let unit_price = parse_decimal(&row[4]).filter(|&p| p != Decimal::ZERO);
-            let currency = "ARS".to_string();
+            let currency = {
+                let moneda = row[5].trim().to_lowercase();
+                if moneda.is_empty() || moneda.contains("peso") || moneda == "ars" {
+                    "ARS".to_string()
+                } else {
+                    "USD".to_string()
+                }
+            };
             let instrument_type = if looks_like_ars_bond(&ticker) { Some("Bond".to_string()) } else { None };
             activities.push(ActivityImport {
                 id: None,
@@ -191,6 +198,20 @@ fn parse_ppi_row(
         None
     };
 
+    // For BUY/SELL, importe includes commissions (importe = qty * precio + comisión).
+    // Extract the implicit fee so the snapshot engine accounts for it correctly.
+    let fee = if matches!(activity_type, "BUY" | "SELL") {
+        match (amount, quantity, unit_price) {
+            (Some(amt), Some(qty), Some(price)) if qty > Decimal::ZERO => {
+                let commission = amt - qty * price;
+                if commission > rust_decimal::Decimal::new(1, 4) { Some(commission) } else { None }
+            }
+            _ => None,
+        }
+    } else {
+        None
+    };
+
     Ok(Some(ActivityImport {
         id: None,
         date,
@@ -199,7 +220,7 @@ fn parse_ppi_row(
         quantity,
         unit_price,
         currency: currency.to_string(),
-        fee: None,
+        fee,
         amount,
         comment: Some(desc.to_string()),
         account_id,
@@ -504,6 +525,32 @@ mod tests {
         assert_eq!(parse_decimal("1234.56"),  Some(Decimal::from_str("1234.56").unwrap()));
         assert_eq!(parse_decimal("0"),        Some(Decimal::ZERO));
         assert_eq!(parse_decimal(""),         None);
+    }
+
+    #[test]
+    fn instrumentos_venta_usd_bond_gets_usd_currency() {
+        // A bond sold in Dólares (e.g. GD30) must come out with currency="USD".
+        let sheets = vec![sheet("Instrumentos", vec![
+            vec!["Fecha", "Descripción", "Especie", "Cantidad", "Precio", "Moneda"],
+            vec!["10/06/2024", "VENTA GD30", "BONOS USD 2030", "-500", "65.20", "Dólares"],
+        ])];
+        let (activities, errors) = parse_ppi_xlsx(&sheets, None);
+        assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+        assert_eq!(activities.len(), 1);
+        assert_eq!(activities[0].currency, "USD");
+    }
+
+    #[test]
+    fn instrumentos_venta_empty_moneda_defaults_to_ars() {
+        // An empty Moneda column must default to ARS (most trades settle in pesos).
+        let sheets = vec![sheet("Instrumentos", vec![
+            vec!["Fecha", "Descripción", "Especie", "Cantidad", "Precio", "Moneda"],
+            vec!["10/06/2024", "VENTA AL30", "BONOS USD 2030 L.A", "-100", "0", ""],
+        ])];
+        let (activities, errors) = parse_ppi_xlsx(&sheets, None);
+        assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+        assert_eq!(activities.len(), 1);
+        assert_eq!(activities[0].currency, "ARS");
     }
 
     #[test]

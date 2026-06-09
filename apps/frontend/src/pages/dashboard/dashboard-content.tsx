@@ -1,5 +1,6 @@
 import { HistoryChart } from "@/components/history-chart";
 import { useHapticFeedback } from "@/hooks";
+import { useCurrencyConversion } from "@/hooks/use-currency-conversion";
 import { useHoldings } from "@/hooks/use-holdings";
 import { useValuationHistory } from "@/hooks/use-valuation-history";
 import {
@@ -73,6 +74,8 @@ export function DashboardContent() {
   const { settings } = useSettingsContext();
   const baseCurrency = settings?.baseCurrency ?? "USD";
 
+  const { convert, displayCurrencyCode } = useCurrencyConversion();
+
   // Calculate gainLossAmount and simpleReturn from valuationHistory
   const { gainLossAmount, simpleReturn } = useMemo(() => {
     return calculatePerformanceMetrics(valuationHistory, isAllTime);
@@ -84,16 +87,23 @@ export function DashboardContent() {
       : null;
   }, [valuationHistory]);
 
+  const displayCurrency = displayCurrencyCode();
+  const displayedTotalValue = convert(totalValue, baseCurrency) ?? totalValue;
+  const displayedGainLoss = convert(gainLossAmount, baseCurrency) ?? gainLossAmount;
+
   const chartData = useMemo(() => {
     return (
-      valuationHistory?.map((item) => ({
-        date: item.valuationDate,
-        totalValue: item.totalValue,
-        netContribution: item.netContribution,
-        currency: item.baseCurrency ?? baseCurrency,
-      })) ?? []
+      valuationHistory?.map((item) => {
+        const itemCurrency = item.baseCurrency ?? baseCurrency;
+        return {
+          date: item.valuationDate,
+          totalValue: convert(item.totalValue, itemCurrency) ?? item.totalValue,
+          netContribution: convert(item.netContribution, itemCurrency) ?? item.netContribution,
+          currency: displayCurrency,
+        };
+      }) ?? []
     );
-  }, [valuationHistory, baseCurrency]);
+  }, [valuationHistory, baseCurrency, convert, displayCurrency]);
 
   const isNegative = totalValue < 0;
 
@@ -116,8 +126,8 @@ export function DashboardContent() {
             <div>
               <Balance
                 isLoading={isHoldingsLoading}
-                targetValue={totalValue}
-                currency={baseCurrency}
+                targetValue={displayedTotalValue}
+                currency={displayCurrency}
                 displayCurrency={true}
               />
               <div className="text-md flex space-x-3">
@@ -131,8 +141,8 @@ export function DashboardContent() {
                   <>
                     <GainAmount
                       className="lg:text-md text-sm font-light"
-                      value={gainLossAmount}
-                      currency={baseCurrency}
+                      value={displayedGainLoss}
+                      currency={displayCurrency}
                       displayCurrency={false}
                     ></GainAmount>
                     <div className="border-secondary my-1 border-r pr-2" />

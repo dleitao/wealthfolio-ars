@@ -11,6 +11,7 @@ import { EmptyPlaceholder } from "@wealthfolio/ui/components/ui/empty-placeholde
 import { Icons } from "@wealthfolio/ui/components/ui/icons";
 import { Skeleton } from "@wealthfolio/ui/components/ui/skeleton";
 import { useBalancePrivacy } from "@/hooks/use-balance-privacy";
+import { useCurrencyConversion } from "@/hooks/use-currency-conversion";
 import { AccountSelector } from "@/components/account-selector";
 import { createPortfolioAccount, PORTFOLIO_ACCOUNT_ID } from "@/lib/constants";
 import type { Account } from "@/lib/types";
@@ -67,6 +68,7 @@ export default function IncomePage() {
   const [selectedPeriod, setSelectedPeriod] = useState<"TOTAL" | "YTD" | "LAST_YEAR">("TOTAL");
   const { isBalanceHidden } = useBalancePrivacy();
   const { settings } = useSettingsContext();
+  const { convert, displayCurrencyCode } = useCurrencyConversion();
   const baseCurrency = settings?.baseCurrency ?? "USD";
   const [isFilterSheetOpen, setIsFilterSheetOpen] = useState(false);
 
@@ -146,6 +148,8 @@ export default function IncomePage() {
   }
 
   const { totalIncome, currency, monthlyAverage, byType, byCurrency } = periodSummary;
+  const displayCurrency = displayCurrencyCode();
+  const c = (v: number) => convert(v, currency) ?? v;
   const dividendIncome = byType.DIVIDEND || 0;
   const interestIncome = byType.INTEREST || 0;
   const dividendPercentage = totalIncome > 0 ? (dividendIncome / totalIncome) * 100 : 0;
@@ -256,8 +260,8 @@ export default function IncomePage() {
                 <div>
                   <div className="text-2xl font-bold">
                     <AmountDisplay
-                      value={totalIncome}
-                      currency={currency}
+                      value={c(totalIncome)}
+                      currency={displayCurrency}
                       isHidden={isBalanceHidden}
                     />
                   </div>
@@ -315,8 +319,8 @@ export default function IncomePage() {
             <CardContent>
               <div className="text-2xl font-bold">
                 <AmountDisplay
-                  value={currentMonthlyAverageNumber}
-                  currency={currency}
+                  value={c(currentMonthlyAverageNumber)}
+                  currency={displayCurrency}
                   isHidden={isBalanceHidden}
                 />
               </div>
@@ -338,8 +342,8 @@ export default function IncomePage() {
                     name: "Dividends",
                     amount: (
                       <AmountDisplay
-                        value={dividendIncome}
-                        currency={currency}
+                        value={c(dividendIncome)}
+                        currency={displayCurrency}
                         isHidden={isBalanceHidden}
                       />
                     ),
@@ -349,8 +353,8 @@ export default function IncomePage() {
                     name: "Interest",
                     amount: (
                       <AmountDisplay
-                        value={interestIncome}
-                        currency={currency}
+                        value={c(interestIncome)}
+                        currency={displayCurrency}
                         isHidden={isBalanceHidden}
                       />
                     ),
@@ -394,7 +398,7 @@ export default function IncomePage() {
             monthlyIncomeData={monthlyIncomeData}
             previousMonthlyIncomeData={previousMonthlyIncomeData}
             selectedPeriod={selectedPeriod}
-            currency={currency}
+            currency={displayCurrency}
             isBalanceHidden={isBalanceHidden}
             byAccount={periodSummary.byAccount}
           />
@@ -468,7 +472,7 @@ export default function IncomePage() {
                                   {item.companyName}
                                 </div>
                                 <div className="text-sm font-medium">
-                                  <PrivacyAmount value={item.income} currency={currency} />
+                                  <PrivacyAmount value={c(item.income)} currency={displayCurrency} />
                                 </div>
                                 <div className="text-muted-foreground text-xs">
                                   {percentage.toFixed(1)}% of total
@@ -492,7 +496,7 @@ export default function IncomePage() {
                         <span className="text-muted-foreground mr-16 text-xs">{asset.name}</span>
                       </div>
                       <div className="text-success text-sm">
-                        <PrivacyAmount value={asset.income} currency={currency} />
+                        <PrivacyAmount value={c(asset.income)} currency={displayCurrency} />
                       </div>
                     </div>
                   ))}
