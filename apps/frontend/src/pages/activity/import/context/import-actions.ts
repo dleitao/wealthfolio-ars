@@ -195,6 +195,13 @@ export function bulkForceImportDrafts(rowIndexes: number[]): ImportAction {
 }
 
 /**
+ * Mark this import as coming from an XLSX file (skips the mapping step).
+ */
+export function setIsXlsxImport(value: boolean): ImportAction {
+  return { type: "SET_IS_XLSX_IMPORT", payload: value };
+}
+
+/**
  * Set currency for multiple draft activities.
  */
 export function bulkSetCurrency(rowIndexes: number[], currency: string): ImportAction {

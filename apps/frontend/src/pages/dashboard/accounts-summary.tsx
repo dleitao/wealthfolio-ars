@@ -1,6 +1,7 @@
 "use client";
 
 import { calculatePerformanceSummaries, performanceSummaryScopeKey } from "@/adapters";
+import { useCurrencyConversion } from "@/hooks/use-currency-conversion";
 import { useAccounts } from "@/hooks/use-accounts";
 import { useLatestValuations } from "@/hooks/use-latest-valuations";
 import { AccountPurpose } from "@/lib/constants";
@@ -71,6 +72,8 @@ const AccountSummaryComponent = React.memo(
     displayInAccountCurrency?: boolean;
     isNested?: boolean;
   }) => {
+    const { convert, displayCurrencyCode } = useCurrencyConversion();
+
     const isGroup = item.isGroup ?? false;
     const useAccountCurrency =
       displayInAccountCurrency || (item.displayInAccountCurrency && Boolean(item.accountCurrency));
@@ -94,23 +97,26 @@ const AccountSummaryComponent = React.memo(
     const name = item.accountName;
     const accountId = item.accountId;
 
-    const subText = isGroup
-      ? `${item.accountCount} ${item.accountCount === 1 ? "account" : "accounts"}`
-      : useAccountCurrency
-        ? (item.accountCurrency ?? item.baseCurrency)
-        : item.baseCurrency;
-
-    const totalValue = useAccountCurrency
+    const rawTotalValue = useAccountCurrency
       ? (item.totalValueAccountCurrency ?? 0)
       : item.totalValueBaseCurrency;
-    const currency = useAccountCurrency
+    const rawCurrency = useAccountCurrency
       ? (item.accountCurrency ?? item.baseCurrency)
       : item.baseCurrency;
-
-    const gainAmountToDisplay = useAccountCurrency
+    const rawGainAmount = useAccountCurrency
       ? item.totalGainLossAmountAccountCurrency
       : item.totalGainLossAmountBaseCurrency;
+
+    const totalValue = convert(rawTotalValue, rawCurrency) ?? rawTotalValue;
+    const currency = displayCurrencyCode();
+    const gainAmountToDisplay = rawGainAmount != null
+      ? (convert(rawGainAmount, rawCurrency) ?? rawGainAmount)
+      : null;
     const gainDisplayCurrency = currency;
+
+    const subText = isGroup
+      ? `${item.accountCount} ${item.accountCount === 1 ? "account" : "accounts"}`
+      : currency;
     const gainPercentToDisplay = item.totalGainLossPercent;
     const hasAnyGainData = gainAmountToDisplay != null || gainPercentToDisplay != null;
     // Distinguish "zero gain with data" from "no data at all" so standalone

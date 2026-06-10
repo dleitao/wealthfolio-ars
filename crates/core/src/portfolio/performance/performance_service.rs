@@ -571,14 +571,21 @@ impl PerformanceService {
         let start_point = full_history.first()?;
         let end_point = full_history.last()?;
         let start_value = Self::return_total_value(start_point, flow_basis);
-        if start_value <= Decimal::ZERO {
-            return None;
-        }
-
         let net_cash_flow: Decimal = daily_flows.iter().map(|flow| flow.net()).sum();
         let end_value = Self::return_total_value(end_point, flow_basis);
 
-        Some((end_value - start_value - net_cash_flow) / start_value)
+        // Gain relative to total capital deployed during the period (start value
+        // plus net external flows). Always sign-consistent with the displayed
+        // gain, handles the tiny-start-value case (a small seed followed by a
+        // large deposit no longer produces a misleadingly large percentage), and
+        // avoids compounded-return distortion when early large losses precede
+        // large deposits.
+        let denominator = start_value + net_cash_flow;
+        if denominator <= Decimal::ZERO {
+            return None;
+        }
+
+        Some((end_value - start_value - net_cash_flow) / denominator)
     }
 
     fn total_external_flows(daily_flows: &[DailyExternalFlow]) -> (Decimal, Decimal) {
@@ -1655,14 +1662,18 @@ impl PerformanceService {
     /// HOLDINGS mode doesn't track cash flows at the transaction level, so
     /// TWR/IRR aren't meaningful — we measure unrealized P&L growth instead.
     ///
-    /// * `is_all_time` — when `true`, divides by ending `cost_basis` (the full
-    ///   amount invested). When `false`, divides by `investment_market_value`
-    ///   at the period start. Non-positive denominators make the percentage
-    ///   undefined, so the return is omitted rather than reported as 0%.
+    /// Divides the period's P&L change by the ending `cost_basis` (the full
+    /// amount invested). This keeps the percentage sign-consistent with the
+    /// displayed gain (dividing by a positive never flips the sign), fixing
+    /// the bug where a recovering but still-underwater portfolio showed a
+    /// positive gain with a negative percent. For all-time ranges
+    /// `start_unrealized_pnl` is typically zero, so this degrades to
+    /// `end_unrealized_pnl / end_cost_basis`. Non-positive denominators make
+    /// the percentage undefined, so the return is omitted rather than
+    /// reported as 0%.
     fn compute_holdings_value_return(
         start_point: &DailyAccountValuation,
         end_point: &DailyAccountValuation,
-        is_all_time: bool,
         flow_basis: ExternalFlowBasis,
     ) -> (Decimal, Option<Decimal>) {
         let start_unrealized_pnl = Self::return_investment_market_value(start_point, flow_basis)
@@ -1671,20 +1682,11 @@ impl PerformanceService {
             - Self::return_cost_basis(end_point, flow_basis);
         let pnl_change = end_unrealized_pnl - start_unrealized_pnl;
 
-        let value_return = if is_all_time {
-            let end_cost_basis = Self::return_cost_basis(end_point, flow_basis);
-            if end_cost_basis <= Decimal::ZERO {
-                None
-            } else {
-                Some(end_unrealized_pnl / end_cost_basis)
-            }
+        let end_cost_basis = Self::return_cost_basis(end_point, flow_basis);
+        let value_return = if end_cost_basis <= Decimal::ZERO {
+            None
         } else {
-            let start_market_value = Self::return_investment_market_value(start_point, flow_basis);
-            if start_market_value <= Decimal::ZERO {
-                None
-            } else {
-                Some(pnl_change / start_market_value)
-            }
+            Some(pnl_change / end_cost_basis)
         };
 
         (pnl_change, value_return)
@@ -2201,7 +2203,21 @@ impl PerformanceService {
         let end_value = Self::return_total_value(end_point, flow_basis);
         let daily_flows = Self::daily_external_flow_series(full_history, flow_basis);
 
-        let twr = if is_holdings_mode {
+        // Auto-fallback to HOLDINGS calculation for accounts with no tracked cash flows
+        // (e.g., XLSX-imported Balanz accounts that lack explicit deposit activities).
+        // Without deposits, net_contribution stays 0 and TWR/IRR compound from a
+        // near-zero base, producing astronomical returns as positions appreciate.
+        let effective_holdings_mode = is_holdings_mode || {
+            let has_contributions = full_history
+                .iter()
+                .any(|p| !Self::return_net_contribution(p, flow_basis).is_zero());
+            let has_investments = full_history
+                .iter()
+                .any(|p| Self::return_cost_basis(p, flow_basis) > Decimal::ZERO);
+            !has_contributions && has_investments
+        };
+
+        let twr = if effective_holdings_mode {
             TwrComputation {
                 cumulative_twr: None,
                 samples: Vec::new(),
@@ -2213,7 +2229,7 @@ impl PerformanceService {
         } else {
             Self::compute_time_weighted_returns(full_history, &daily_flows, flow_basis)?
         };
-        let irr = if is_holdings_mode && include_irr {
+        let irr = if effective_holdings_mode && include_irr {
             IrrComputation {
                 annualized_irr: None,
                 warnings: Vec::new(),
@@ -2240,7 +2256,7 @@ impl PerformanceService {
             });
         }
 
-        if is_holdings_mode && (include_risk || include_returns_series) {
+        if effective_holdings_mode && (include_risk || include_returns_series) {
             let mut cumulative_value_factor = Decimal::ONE;
             for (index, window) in full_history.windows(2).enumerate() {
                 let prev = &window[0];
@@ -2272,7 +2288,7 @@ impl PerformanceService {
                     });
                 }
             }
-        } else if !is_holdings_mode {
+        } else if !effective_holdings_mode {
             for (date, sample) in &twr.samples {
                 if include_risk && !sample.excluded_from_compounding {
                     risk_samples.push(RiskSample {
@@ -2295,21 +2311,14 @@ impl PerformanceService {
             Self::empty_risk()
         };
 
-        let (mode, value_return, value_return_not_applicable_reason) = if is_holdings_mode {
-            let (_pnl_change, ret) = Self::compute_holdings_value_return(
-                start_point,
-                end_point,
-                start_date_opt.is_none(),
-                flow_basis,
-            );
+        let (mode, value_return, value_return_not_applicable_reason) = if effective_holdings_mode {
+            let (_pnl_change, ret) =
+                Self::compute_holdings_value_return(start_point, end_point, flow_basis);
             let reason = if ret.is_none() {
-                Some(if start_date_opt.is_none() {
+                Some(
                     "Value return unavailable for holdings-only scope because ending cost basis is zero or negative."
-                        .to_string()
-                } else {
-                    "Value return unavailable for holdings-only scope because starting market value is zero or negative."
-                        .to_string()
-                })
+                        .to_string(),
+                )
             } else {
                 None
             };
@@ -2429,7 +2438,7 @@ impl PerformanceService {
             risk,
             Self::data_quality(warnings, not_applicable_reasons, false),
             series,
-            is_holdings_mode,
+            effective_holdings_mode,
             false,
         ))
     }
@@ -2466,10 +2475,17 @@ impl PerformanceService {
         let gain_loss_amount = end_value - start_value - net_cash_flow;
         let include_risk = profile == PerformanceSummaryProfile::Full;
         let include_annualized_returns = profile == PerformanceSummaryProfile::Full;
-        let value_return = if start_value > Decimal::ZERO {
-            Some(gain_loss_amount / start_value)
-        } else {
-            None
+        // Gain relative to total capital deployed (start value plus net external
+        // flows) so the headline percentage is always sign-consistent with the
+        // displayed gain and doesn't blow up when a small start value precedes
+        // large deposits.
+        let value_return = {
+            let denominator = start_value + net_cash_flow;
+            if denominator > Decimal::ZERO {
+                Some(gain_loss_amount / denominator)
+            } else {
+                None
+            }
         };
         if full_history
             .iter()
@@ -2505,11 +2521,16 @@ impl PerformanceService {
                 }
 
                 cumulative_external_flow += flow.net();
-                let cumulative_return = if start_value > Decimal::ZERO {
-                    let cumulative_gain = curr_value - start_value - cumulative_external_flow;
-                    Some(cumulative_gain / start_value)
-                } else {
-                    None
+                // Same deployed-capital denominator as the headline value_return
+                // so the final series point always matches it.
+                let cumulative_return = {
+                    let denominator = start_value + cumulative_external_flow;
+                    if denominator > Decimal::ZERO {
+                        let cumulative_gain = curr_value - start_value - cumulative_external_flow;
+                        Some(cumulative_gain / denominator)
+                    } else {
+                        None
+                    }
                 };
 
                 let day_gain = curr_value + flow.outflow - prev_value - flow.inflow;
@@ -3754,6 +3775,16 @@ mod tests {
             Ok(())
         }
 
+        async fn save_historical_fx_quotes(
+            &self,
+            _from_currency: &str,
+            _to_currency: &str,
+            _quotes: Vec<(NaiveDate, Decimal)>,
+            _source: &str,
+        ) -> Result<usize> {
+            Ok(0)
+        }
+
         fn get_historical_rates(
             &self,
             _from_currency: &str,
@@ -4750,10 +4781,12 @@ mod tests {
         assert_eq!(performance.attribution.residual, Decimal::ZERO);
         assert_eq!(attribution_pnl(&performance), dec!(200));
         assert_eq!(performance.returns.twr.unwrap().round_dp(4), dec!(0.2));
+        // gain 200 over deployed capital (1000 start - 200 withdrawn) = 25%.
         assert_eq!(
             performance.returns.value_return.unwrap().round_dp(4),
-            dec!(0.2)
+            dec!(0.25)
         );
+        // The series is TWR-based in transaction mode.
         assert_eq!(
             performance.series.last().unwrap().value.round_dp(4),
             dec!(0.2)
@@ -4863,10 +4896,12 @@ mod tests {
         assert_eq!(performance.attribution.residual, Decimal::ZERO);
         assert_eq!(attribution_pnl(&performance), dec!(520));
         assert_eq!(performance.returns.twr.unwrap().round_dp(4), dec!(0.52));
+        // gain 520 over deployed capital (1000 start - 100 withdrawn) = 57.78%.
         assert_eq!(
             performance.returns.value_return.unwrap().round_dp(4),
-            dec!(0.52)
+            dec!(0.5778)
         );
+        // The series is TWR-based in transaction mode.
         assert_eq!(
             performance.series.last().unwrap().value.round_dp(4),
             dec!(0.52)
@@ -5017,9 +5052,11 @@ mod tests {
 
         // $ gain is unchanged — end - start - cash_flow = 2089.16 - 100 - 2000.
         assert_eq!(attribution_pnl(&result), dec!(-10.84));
+        // Deployed-capital denominator: -10.84 over (100 seed + 2000 deposit)
+        // = -0.52%, instead of the misleading -10.84% from `gain / start_value`.
         assert_eq!(
             result.returns.value_return.unwrap().round_dp(4),
-            dec!(-0.1084)
+            dec!(-0.0052)
         );
         assert!(!result
             .data_quality
@@ -5398,12 +5435,8 @@ mod tests {
 
         assert_eq!(result.returns.twr.unwrap().round_dp(4), dec!(0.1));
         assert!(result.returns.irr.is_some());
-        assert!(result.returns.value_return.is_none());
-        assert!(result
-            .data_quality
-            .not_applicable_reasons
-            .iter()
-            .any(|reason| reason.contains("starting value is zero or negative")));
+        // Deployed-capital denominator: gain 10 over (0 start + 100 deposited) = 10%.
+        assert_eq!(result.returns.value_return.unwrap().round_dp(4), dec!(0.1));
         assert_eq!(result.series.last().unwrap().value.round_dp(4), dec!(0.1));
     }
 
@@ -5472,7 +5505,8 @@ mod tests {
         assert_eq!(result.attribution.unrealized_pnl_change, dec!(10));
         assert_eq!(result.attribution.residual, Decimal::ZERO);
         assert_eq!(result.returns.twr.unwrap().round_dp(4), dec!(0.0667));
-        assert_eq!(result.returns.value_return.unwrap().round_dp(4), dec!(0.1));
+        // gain 10 over deployed capital (100 start + 50 net inflow) = 6.67%.
+        assert_eq!(result.returns.value_return.unwrap().round_dp(4), dec!(0.0667));
         assert!(result.returns.irr.is_some());
         assert!(result
             .data_quality
@@ -6164,11 +6198,13 @@ mod tests {
         assert_eq!(result.returns.twr.unwrap().round_dp(4), dec!(0.05));
     }
 
-    /// HOLDINGS mode uses the cost-basis formula in both paths. TWR/IRR are
+    /// HOLDINGS mode: sign of value_return matches the period P&L change, and TWR/IRR are
     /// returned as `None` because they aren't meaningful without per-transaction
     /// cash-flow tracking.
+    /// start_unrealized_pnl = 0 so pnl_change = end_unrealized_pnl = -100 →
+    /// value_return = -100/1000 = -0.10 (same result as the previous formula in this case).
     #[test]
-    fn perf_holdings_mode_uses_cost_basis_formula() {
+    fn perf_holdings_mode_period_return_sign_consistent() {
         let history = vec![
             valuation("2026-02-15", dec!(1000), dec!(1000), dec!(1000), dec!(1000)),
             valuation("2026-04-14", dec!(900), dec!(1000), dec!(900), dec!(1000)),
@@ -6177,7 +6213,7 @@ mod tests {
         let result = PerformanceService::compute_account_performance(
             &history,
             Some(TrackingMode::Holdings),
-            None, // ALL-time branch
+            None,
             false,
         )
         .expect("holdings should compute");
@@ -6236,7 +6272,7 @@ mod tests {
             .data_quality
             .not_applicable_reasons
             .iter()
-            .any(|reason| reason.contains("starting market value")));
+            .any(|reason| reason.contains("ending cost basis")));
     }
 
     #[test]
@@ -6277,8 +6313,9 @@ mod tests {
         assert!(result.is_mixed_tracking_mode);
         assert_eq!(result.mode, ReturnMethod::ValueReturn);
         assert_eq!(attribution_pnl(&result), dec!(60));
-        assert_eq!(result.returns.value_return.unwrap().round_dp(4), dec!(0.04));
-        assert_eq!(result.series.last().unwrap().value.round_dp(4), dec!(0.04));
+        // gain 60 over deployed capital (1500 start + 100 inflow) = 3.75%.
+        assert_eq!(result.returns.value_return.unwrap().round_dp(4), dec!(0.0375));
+        assert_eq!(result.series.last().unwrap().value.round_dp(4), dec!(0.0375));
         assert!(result.returns.twr.is_none());
         assert!(result.returns.irr.is_none());
         assert!(!result.data_quality.warnings.is_empty());
@@ -6306,8 +6343,9 @@ mod tests {
             .expect("mixed scope should compute from base values");
 
         assert_eq!(result.scope.currency, "CAD");
-        assert_eq!(result.returns.value_return.unwrap().round_dp(4), dec!(0.2));
-        assert_eq!(result.series.last().unwrap().value.round_dp(4), dec!(0.2));
+        // gain 20 over deployed capital (100 start + 10 inflow) = 18.18%.
+        assert_eq!(result.returns.value_return.unwrap().round_dp(4), dec!(0.1818));
+        assert_eq!(result.series.last().unwrap().value.round_dp(4), dec!(0.1818));
         assert_eq!(result.attribution.contributions, dec!(10));
     }
 
@@ -6331,8 +6369,11 @@ mod tests {
         }
     }
 
+    /// Zero start value with a later deposit: the deployed-capital denominator
+    /// (start + net inflows) is positive, so the value return is defined (0% —
+    /// the deposit produced no gain) instead of N/A.
     #[test]
-    fn mixed_scope_with_zero_start_value_returns_not_applicable_value_return() {
+    fn mixed_scope_with_zero_start_value_uses_deployed_capital_denominator() {
         let mut history = vec![
             valuation(
                 "2026-05-01",
@@ -6346,12 +6387,12 @@ mod tests {
         history[1].external_inflow_base = dec!(100);
 
         let result = PerformanceService::compute_mixed_scope_performance(&history, true)
-            .expect("mixed scope should compute P&L without a percentage denominator");
+            .expect("mixed scope should compute");
 
-        assert!(result.returns.value_return.is_none());
-        assert!(result.returns.annualized_value_return.is_none());
-        assert!(result.series.is_empty());
-        assert!(result
+        // gain = 100 - 0 - 100 = 0 over deployed capital 100 → 0%.
+        assert_eq!(result.returns.value_return, Some(Decimal::ZERO));
+        assert_eq!(result.series.last().unwrap().value, Decimal::ZERO);
+        assert!(!result
             .data_quality
             .not_applicable_reasons
             .iter()
@@ -6505,5 +6546,40 @@ mod tests {
         assert!(result.risk.volatility.is_some());
         assert!(result.data_quality.warnings.is_empty());
         assert_eq!(result.data_quality.status, DataQualityStatus::Ok);
+    }
+
+    /// Regression: recovering-from-loss portfolio (like Balanz XLSX) must show
+    /// a value_return with the same sign as the period's P&L change. Before the
+    /// fix, `end_unrealized_pnl / end_cost_basis` was negative even when prices
+    /// improved over the period.
+    #[test]
+    fn perf_holdings_mode_gain_and_return_same_sign_when_recovering_from_loss() {
+        let history = vec![
+            // start: total=500, contrib=0, inv_mv=500, cb=1000 → unrealized_pnl = -500
+            valuation("2026-01-01", dec!(500), Decimal::ZERO, dec!(500), dec!(1000)),
+            // end:   total=600, contrib=0, inv_mv=600, cb=1000 → unrealized_pnl = -400
+            valuation("2026-06-01", dec!(600), Decimal::ZERO, dec!(600), dec!(1000)),
+        ];
+
+        let result = PerformanceService::compute_account_performance(
+            &history,
+            Some(TrackingMode::Holdings),
+            None,
+            false,
+        )
+        .expect("should compute");
+
+        // pnl_change = (-400) - (-500) = +100 → positive (prices recovered)
+        let value_return = result
+            .returns
+            .value_return
+            .expect("value_return should be Some");
+        assert!(
+            value_return > Decimal::ZERO,
+            "value_return = {} should be positive when the period P&L change is positive",
+            value_return
+        );
+        // value_return = 100 / 1000 = 0.10
+        assert_eq!(value_return.round_dp(2), dec!(0.10));
     }
 }

@@ -49,6 +49,10 @@ pub trait AssetServiceTrait: Send + Sync {
     /// Returns (enriched_count, skipped_count, failed_count).
     async fn enrich_assets(&self, asset_ids: Vec<String>) -> Result<(usize, usize, usize)>;
 
+    /// Batch-fetch TradingView Argentina sector/country profiles for all XBUE-listed assets
+    /// and persist the results. Returns (classified_count, not_found_count).
+    async fn enrich_xbue_sectors(&self) -> Result<(usize, usize)>;
+
     /// Removes the $.legacy structure from asset metadata after migration.
     /// Preserves $.identifiers if present.
     async fn cleanup_legacy_metadata(&self, asset_id: &str) -> Result<()>;
@@ -275,6 +279,10 @@ mod tests {
 
         async fn enrich_assets(&self, _asset_ids: Vec<String>) -> Result<(usize, usize, usize)> {
             unimplemented!()
+        }
+
+        async fn enrich_xbue_sectors(&self) -> Result<(usize, usize)> {
+            Ok((0, 0))
         }
 
         async fn cleanup_legacy_metadata(&self, _asset_id: &str) -> Result<()> {

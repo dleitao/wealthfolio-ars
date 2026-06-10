@@ -43,6 +43,7 @@ import SpendingSettingsCategoriesPage from "./pages/settings/spending/categories
 import SpendingSettingsEventsPage from "./pages/settings/spending/events/spending-events-page";
 import SpendingSettingsRulesPage from "./pages/settings/spending/rules/spending-rules-page";
 import SpendingSetupPage from "./pages/settings/spending/setup/spending-setup-page";
+import PpiSettingsPage from "./pages/settings/ppi/ppi-settings-page";
 import GoalsDashboardPage from "@/features/goals/pages/goals-dashboard-page";
 import GoalNewPage from "@/features/goals/pages/goal-new-page";
 import GoalDetailPage from "@/features/goals/pages/goal-detail-page";
@@ -144,6 +145,7 @@ export function AppRoutes() {
             <Route path="taxonomies" element={<TaxonomiesPage />} />
             <Route path="connect" element={<ConnectSettingsPage />} />
             <Route path="ai-providers" element={<AiProvidersPage />} />
+            <Route path="ppi" element={<PpiSettingsPage />} />
             <Route path="addons" element={<AddonSettingsPage />} />
           </Route>
           <Route path="*" element={<NotFoundPage />} />

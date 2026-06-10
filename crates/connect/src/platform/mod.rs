@@ -1,5 +1,7 @@
 //! Platform contracts for Wealthfolio Connect.
 
+pub mod ppi;
+
 use serde::{Deserialize, Serialize};
 
 /// Domain model representing a brokerage platform.

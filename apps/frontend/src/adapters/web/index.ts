@@ -107,7 +107,8 @@ export {
   searchActivities,
   updateActivity,
 } from "../shared/activities";
-export { parseCsv } from "./activities";
+export { parseCsv, parseXlsx } from "./activities";
+export type { ParsedXlsxResult } from "./activities";
 
 // Goal Commands
 export {
@@ -343,6 +344,12 @@ export {
 
 // Data Export Commands
 export { exportDataFile } from "./exports";
+
+// PPI Broker Commands
+export * from "../shared/ppi";
+
+// Argentina Commands
+export * from "../shared/argentina";
 
 // ============================================================================
 // Platform-specific modules (different implementations for web vs desktop)

@@ -1420,6 +1420,15 @@ mod tests {
         fn initialize(&self) -> CoreResult<()> {
             Ok(())
         }
+        async fn save_historical_fx_quotes(
+            &self,
+            _from_currency: &str,
+            _to_currency: &str,
+            _quotes: Vec<(chrono::NaiveDate, rust_decimal::Decimal)>,
+            _source: &str,
+        ) -> CoreResult<usize> {
+            Ok(0)
+        }
         fn get_historical_rates(&self, _: &str, _: &str, _: i64) -> CoreResult<Vec<ExchangeRate>> {
             Ok(vec![])
         }
@@ -1478,6 +1487,15 @@ mod tests {
     impl FxServiceTrait for DoubleEurFx {
         fn initialize(&self) -> CoreResult<()> {
             Ok(())
+        }
+        async fn save_historical_fx_quotes(
+            &self,
+            _from_currency: &str,
+            _to_currency: &str,
+            _quotes: Vec<(chrono::NaiveDate, rust_decimal::Decimal)>,
+            _source: &str,
+        ) -> CoreResult<usize> {
+            Ok(0)
         }
         fn get_historical_rates(&self, _: &str, _: &str, _: i64) -> CoreResult<Vec<ExchangeRate>> {
             Ok(vec![])
@@ -1546,6 +1564,15 @@ mod tests {
     impl FxServiceTrait for FailingFx {
         fn initialize(&self) -> CoreResult<()> {
             Ok(())
+        }
+        async fn save_historical_fx_quotes(
+            &self,
+            _from_currency: &str,
+            _to_currency: &str,
+            _quotes: Vec<(chrono::NaiveDate, rust_decimal::Decimal)>,
+            _source: &str,
+        ) -> CoreResult<usize> {
+            Ok(0)
         }
         fn get_historical_rates(&self, _: &str, _: &str, _: i64) -> CoreResult<Vec<ExchangeRate>> {
             Ok(vec![])

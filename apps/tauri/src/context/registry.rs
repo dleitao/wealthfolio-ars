@@ -5,7 +5,9 @@ use wealthfolio_core::{
     self, accounts, activities,
     assets::{self, AlternativeAssetServiceTrait},
     events::DomainEventSink,
-    fx, goals, health, limits,
+    fx, goals, health,
+    inflation::InflationService,
+    limits,
     lots::LotRepositoryTrait,
     portfolio, portfolios, quotes, settings, taxonomies,
 };
@@ -78,6 +80,7 @@ pub struct ServiceContext {
     pub budget_service: Arc<BudgetService>,
     pub spending_analytics_service: Arc<AnalyticsService>,
     pub spending_insight_service: Arc<InsightService>,
+    pub inflation_service: Arc<InflationService>,
 }
 
 impl ServiceContext {
@@ -247,5 +250,15 @@ impl ServiceContext {
 
     pub fn health_service(&self) -> Arc<health::HealthService> {
         Arc::clone(&self.health_service)
+    }
+
+    pub fn inflation_service(&self) -> Arc<InflationService> {
+        Arc::clone(&self.inflation_service)
+    }
+
+    pub fn custom_provider_service(
+        &self,
+    ) -> Arc<wealthfolio_core::custom_provider::CustomProviderService> {
+        Arc::clone(&self.custom_provider_service)
     }
 }

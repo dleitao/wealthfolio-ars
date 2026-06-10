@@ -80,7 +80,8 @@ export * from "../shared/accounts";
 
 // Activity Commands
 export * from "../shared/activities";
-export { parseCsv } from "./activities";
+export { parseCsv, parseXlsx } from "./activities";
+export type { ParsedXlsxResult } from "./activities";
 
 // Portfolio Commands
 export * from "../shared/portfolio";
@@ -126,6 +127,12 @@ export * from "../shared/allocation-targets";
 
 // Data Export Commands
 export { exportDataFile } from "./exports";
+
+// PPI Broker Commands
+export * from "../shared/ppi";
+
+// Argentina Commands
+export * from "../shared/argentina";
 
 // ============================================================================
 // Platform-specific modules (different implementations)

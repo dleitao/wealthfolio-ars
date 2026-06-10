@@ -149,6 +149,15 @@ mod tests {
         async fn ensure_fx_pairs(&self, _pairs: Vec<(String, String)>) -> AppResult<()> {
             Ok(())
         }
+        async fn save_historical_fx_quotes(
+            &self,
+            _from_currency: &str,
+            _to_currency: &str,
+            _quotes: Vec<(chrono::NaiveDate, Decimal)>,
+            _source: &str,
+        ) -> AppResult<usize> {
+            Ok(0)
+        }
     }
 
     #[derive(Clone, Debug)]

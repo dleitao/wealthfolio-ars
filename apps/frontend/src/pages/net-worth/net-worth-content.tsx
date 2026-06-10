@@ -1,4 +1,5 @@
 import { useNetWorth, useNetWorthHistory } from "@/hooks/use-alternative-assets";
+import { useCurrencyConversion } from "@/hooks/use-currency-conversion";
 import { usePortfolioAllocations } from "@/hooks/use-portfolio-allocations";
 import { useIsMobileViewport } from "@/hooks/use-platform";
 import { useSettingsContext } from "@/lib/settings-provider";
@@ -50,6 +51,9 @@ export function NetWorthContent() {
   const { settings } = useSettingsContext();
   const { data: netWorthData, isLoading, isError, error } = useNetWorth();
   const isMobile = useIsMobileViewport();
+  const { convert, displayCurrencyCode } = useCurrencyConversion();
+  const sourceCurrency = netWorthData?.currency || settings?.baseCurrency || "USD";
+  const c = (v: number) => convert(v, sourceCurrency) ?? v;
 
   const [intervalCode] = usePersistentState<TimePeriod>(INTERVAL_STORAGE_KEY, DEFAULT_INTERVAL);
 
@@ -107,36 +111,62 @@ export function NetWorthContent() {
   const parsedData = useMemo((): ParsedNetWorth | null => {
     if (!netWorthData) return null;
     return {
-      netWorth: parseFloat(netWorthData.netWorth) || 0,
+      netWorth: c(parseFloat(netWorthData.netWorth) || 0),
       assets: {
-        total: parseFloat(netWorthData.assets.total) || 0,
+        total: c(parseFloat(netWorthData.assets.total) || 0),
         breakdown: (netWorthData.assets.breakdown || []).map((item) => ({
           category: item.category,
           name: item.name,
-          value: parseFloat(item.value) || 0,
+          value: c(parseFloat(item.value) || 0),
           assetId: item.assetId,
           children: (item.children ?? []).map((child) => ({
             category: child.category,
             name: child.name,
-            value: parseFloat(child.value) || 0,
+            value: c(parseFloat(child.value) || 0),
             assetId: child.assetId,
           })),
         })),
       },
       liabilities: {
-        total: parseFloat(netWorthData.liabilities.total) || 0,
+        total: c(parseFloat(netWorthData.liabilities.total) || 0),
         breakdown: (netWorthData.liabilities.breakdown || []).map((item) => ({
           category: item.category,
           name: item.name,
-          value: parseFloat(item.value) || 0,
+          value: c(parseFloat(item.value) || 0),
           assetId: item.assetId,
         })),
       },
     };
-  }, [netWorthData]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [netWorthData, convert, sourceCurrency]);
 
-  const parsedHistory = useMemo(() => parseHistory(historyData), [historyData]);
-  const longHistory = useMemo(() => parseHistory(longHistoryData), [longHistoryData]);
+  // Convert parsed histories to the display currency so derived metrics
+  // (gain/loss, momentum, velocity, per-row period change) stay coherent
+  // with the converted breakdown values.
+  const convertHistory = (points: ReturnType<typeof parseHistory>) =>
+    points.map((point) => ({
+      ...point,
+      netWorth: c(point.netWorth),
+      totalAssets: c(point.totalAssets),
+      totalLiabilities: c(point.totalLiabilities),
+      portfolioValue: c(point.portfolioValue),
+      alternativeAssetsValue: c(point.alternativeAssetsValue),
+      netContribution: c(point.netContribution),
+      breakdown: Object.fromEntries(
+        Object.entries(point.breakdown).map(([key, value]) => [key, c(value)]),
+      ),
+    }));
+
+  const parsedHistory = useMemo(
+    () => convertHistory(parseHistory(historyData)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [historyData, convert, sourceCurrency],
+  );
+  const longHistory = useMemo(
+    () => convertHistory(parseHistory(longHistoryData)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [longHistoryData, convert, sourceCurrency],
+  );
 
   const velocity = useMemo(() => computeVelocity(parsedHistory), [parsedHistory]);
   const trailingYearMonthly = useMemo(() => {
@@ -159,7 +189,7 @@ export function NetWorthContent() {
     return { gainLossAmount: change, gainLossPercent: change / base };
   }, [parsedHistory]);
 
-  const currency = netWorthData?.currency || settings?.baseCurrency || "USD";
+  const currency = displayCurrencyCode();
   const hasStaleValuations = netWorthData && netWorthData.staleAssets.length > 0;
   const periodLabel = periodCode;
 

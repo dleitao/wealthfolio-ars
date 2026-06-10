@@ -161,6 +161,15 @@ mod tests {
                 )))),
             }
         }
+        async fn save_historical_fx_quotes(
+            &self,
+            _from_currency: &str,
+            _to_currency: &str,
+            _quotes: Vec<(NaiveDate, Decimal)>,
+            _source: &str,
+        ) -> Result<usize> {
+            Ok(0)
+        }
     }
 
     // --- Mock MarketDataService (implements QuoteServiceTrait) ---

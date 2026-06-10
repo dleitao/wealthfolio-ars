@@ -18,6 +18,7 @@ use wealthfolio_core::{
     fx::{FxService, FxServiceTrait},
     goals::GoalService,
     health::HealthService,
+    inflation::InflationService,
     limits::ContributionLimitService,
     portfolio::{
         allocation::AllocationService,
@@ -40,6 +41,7 @@ use wealthfolio_storage_sqlite::{
     activities::ActivityRepository,
     ai_chat::AiChatRepository,
     assets::{AlternativeAssetRepository, AssetRepository},
+    inflation::InflationRepository,
     db::{self, write_actor},
     fx::FxRepository,
     goals::GoalRepository,
@@ -494,6 +496,9 @@ pub async fn initialize_context(
         .with_quote_store(market_data_repo.clone()),
     );
 
+    let inflation_repository = Arc::new(InflationRepository::new(pool.clone(), writer.clone()));
+    let inflation_service = Arc::new(InflationService::new(inflation_repository));
+
     let connect_service = Arc::new(ConnectService::new(secret_store.clone()));
 
     // AI provider service - catalog is embedded at compile time
@@ -603,6 +608,7 @@ pub async fn initialize_context(
             budget_service,
             spending_analytics_service,
             spending_insight_service,
+            inflation_service,
         },
         event_receiver,
         sync_outbox_wake_receiver,

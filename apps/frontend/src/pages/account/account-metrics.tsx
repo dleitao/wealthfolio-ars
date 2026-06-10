@@ -1,3 +1,4 @@
+import { useCurrencyConversion } from "@/hooks/use-currency-conversion";
 import { AccountValuation, PerformanceResult } from "@/lib/types";
 import { cn, formatDate } from "@/lib/utils";
 import { PerformanceGrid } from "@/pages/account/performance-grid";
@@ -143,7 +144,10 @@ const AccountMetrics: React.FC<AccountMetricsProps> = ({
       </Card>
     );
 
-  const displayCurrency = valuation?.accountCurrency || valuation?.baseCurrency;
+  const { convert, displayCurrencyCode } = useCurrencyConversion();
+  const accountCurrency = valuation?.accountCurrency || valuation?.baseCurrency;
+  const convCurrency = displayCurrencyCode();
+  const c = (v: number) => convert(v, accountCurrency) ?? v;
 
   // Calculate Unrealized P&L for Holdings mode
   // Use investmentMarketValue (not totalValue) to exclude cash from P&L calculation
@@ -160,20 +164,20 @@ const AccountMetrics: React.FC<AccountMetricsProps> = ({
           label: "Investments",
           value: (
             <PrivacyAmount
-              value={valuation?.investmentMarketValue || 0}
-              currency={displayCurrency}
+              value={c(valuation?.investmentMarketValue || 0)}
+              currency={convCurrency}
             />
           ),
         },
         {
           label: "Cost Basis",
-          value: <PrivacyAmount value={valuation?.costBasis || 0} currency={displayCurrency} />,
+          value: <PrivacyAmount value={c(valuation?.costBasis || 0)} currency={convCurrency} />,
         },
         {
           label: "Unrealized P&L",
           value: (
             <span className="flex items-center gap-1">
-              <GainAmount value={unrealizedPnL} currency={displayCurrency} className="text-sm" />
+              <GainAmount value={c(unrealizedPnL)} currency={convCurrency} className="text-sm" />
               <GainPercent value={unrealizedPnLPercent / 100} variant="badge" className="text-xs" />
             </span>
           ),
@@ -184,20 +188,20 @@ const AccountMetrics: React.FC<AccountMetricsProps> = ({
           label: "Investments",
           value: (
             <PrivacyAmount
-              value={valuation?.investmentMarketValue || 0}
-              currency={displayCurrency}
+              value={c(valuation?.investmentMarketValue || 0)}
+              currency={convCurrency}
             />
           ),
         },
         {
           label: "Net Contribution",
           value: (
-            <PrivacyAmount value={valuation?.netContribution || 0} currency={displayCurrency} />
+            <PrivacyAmount value={c(valuation?.netContribution || 0)} currency={convCurrency} />
           ),
         },
         {
           label: "Cost Basis",
-          value: <PrivacyAmount value={valuation?.costBasis || 0} currency={displayCurrency} />,
+          value: <PrivacyAmount value={c(valuation?.costBasis || 0)} currency={convCurrency} />,
         },
       ];
 
@@ -241,11 +245,11 @@ const AccountMetrics: React.FC<AccountMetricsProps> = ({
             <EditableBalance
               account={valuation}
               initialBalance={valuation?.cashBalance || 0}
-              currency={displayCurrency}
+              currency={accountCurrency}
             />
           ) : (
             <span className="text-lg font-extrabold">
-              <PrivacyAmount value={valuation?.cashBalance || 0} currency={displayCurrency} />
+              <PrivacyAmount value={c(valuation?.cashBalance || 0)} currency={convCurrency} />
             </span>
           )}
         </div>

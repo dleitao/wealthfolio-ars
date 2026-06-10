@@ -9,6 +9,7 @@ import { ActionPalette, type ActionPaletteGroup } from "@/components/action-pale
 import { TickerAvatar } from "@/components/ticker-avatar";
 import { useHapticFeedback } from "@/hooks";
 import { useAlternativeAssetHolding, useAlternativeHoldings } from "@/hooks/use-alternative-assets";
+import { useCurrencyConversion } from "@/hooks/use-currency-conversion";
 import { useIsMobileViewport } from "@/hooks/use-platform";
 import { useQuoteHistory } from "@/hooks/use-quote-history";
 import { useSyncMarketDataMutation } from "@/hooks/use-sync-market-data";
@@ -146,6 +147,7 @@ const parseSubTabParam = (param: string | null): OverviewSubTab => {
 export const AssetProfilePage = () => {
   const { settings } = useSettingsContext();
   const baseCurrency = settings?.baseCurrency ?? "USD";
+  const { convert, displayCurrencyCode } = useCurrencyConversion();
   const { assetId: encodedAssetId = "" } = useParams<{ assetId: string }>();
   const assetId = decodeURIComponent(encodedAssetId);
   const location = useLocation();
@@ -550,6 +552,7 @@ export const AssetProfilePage = () => {
       instrument?.currency ??
       asset?.quoteCcy ??
       baseCurrency;
+    const cv = (v: number) => convert(v, displayCurrency) ?? v;
     const quantity = Number(holding?.quantity ?? 0);
 
     const contractMultiplier = Number(holding?.contractMultiplier ?? 1);
@@ -666,26 +669,29 @@ export const AssetProfilePage = () => {
 
     return {
       numShares: quantity,
-      marketValue: Number(holding?.marketValue.local ?? 0),
-      costBasis: Number(holding?.costBasis?.local ?? 0),
-      averagePrice: Number(averageCostPrice),
+      marketValue: cv(Number(holding?.marketValue.local ?? 0)),
+      costBasis: cv(Number(holding?.costBasis?.local ?? 0)),
+      averagePrice: cv(Number(averageCostPrice)),
       portfolioPercent: Number(holding?.weight ?? 0),
-      todaysReturn: todaysReturn != null ? Number(todaysReturn) : null,
+      todaysReturn: todaysReturn != null ? cv(Number(todaysReturn)) : null,
       todaysReturnPercent: todaysReturnPercent != null ? Number(todaysReturnPercent) : null,
       unrealizedPnl:
-        holding?.unrealizedGain?.local != null ? Number(holding.unrealizedGain.local) : null,
+        holding?.unrealizedGain?.local != null ? cv(Number(holding.unrealizedGain.local)) : null,
       unrealizedPnlPercent:
         holding?.unrealizedGainPct != null ? Number(holding.unrealizedGainPct) : null,
-      realizedPnl,
+      realizedPnl: realizedPnl != null ? cv(realizedPnl) : null,
       realizedPnlPercent,
-      income,
-      fxEffect,
+      income: income != null ? cv(income) : null,
+      fxEffect:
+        fxEffect != null
+          ? (convert(fxEffect, holding?.baseCurrency ?? baseCurrency) ?? fxEffect)
+          : null,
       priceReturnPercent,
-      totalPnl,
+      totalPnl: totalPnl != null ? cv(totalPnl) : null,
       totalPnlPercent,
-      totalReturn,
+      totalReturn: totalReturn != null ? cv(totalReturn) : null,
       totalReturnPercent,
-      currency: displayCurrency,
+      currency: displayCurrencyCode(),
       baseCurrency: holding?.baseCurrency ?? baseCurrency,
       quoteCurrency: quoteData?.quoteCurrency ?? null,
       quote: quoteData?.quote ?? null,

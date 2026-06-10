@@ -729,6 +729,15 @@ impl FxServiceTrait for MockFxService {
     async fn ensure_fx_pairs(&self, _pairs: Vec<(String, String)>) -> Result<()> {
         Ok(())
     }
+    async fn save_historical_fx_quotes(
+        &self,
+        _from_currency: &str,
+        _to_currency: &str,
+        _quotes: Vec<(chrono::NaiveDate, Decimal)>,
+        _source: &str,
+    ) -> Result<usize> {
+        Ok(0)
+    }
 }
 
 struct MockValuationRepository {

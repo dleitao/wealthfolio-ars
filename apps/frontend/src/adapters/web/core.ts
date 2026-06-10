@@ -161,6 +161,16 @@ export const COMMANDS: CommandMap = {
   set_secret: { method: "POST", path: "/secrets" },
   get_secret: { method: "GET", path: "/secrets" },
   delete_secret: { method: "DELETE", path: "/secrets" },
+  sync_ppi_data: { method: "POST", path: "/ppi/sync" },
+  // PPI credentials are composed client-side from the secrets endpoints
+  // (handled before dispatch in `invoke`); paths here are placeholders so
+  // the command-parity check sees them registered.
+  save_ppi_credentials: { method: "POST", path: "/secrets" },
+  get_ppi_credentials_status: { method: "GET", path: "/secrets" },
+  delete_ppi_credentials: { method: "DELETE", path: "/secrets" },
+  sync_inflation_data: { method: "POST", path: "/argentina/inflation/sync" },
+  get_inflation_data: { method: "GET", path: "/argentina/inflation" },
+  sync_argentina_sectors: { method: "POST", path: "/argentina/sectors/sync" },
   // Taxonomies
   get_taxonomies: { method: "GET", path: "/taxonomies" },
   get_taxonomy: { method: "GET", path: "/taxonomies" },
@@ -421,9 +431,59 @@ export function toBase64(data: Uint8Array | number[]): string {
 /**
  * Invoke a command via REST API (internal - use typed adapter functions instead)
  */
+const PPI_SECRET_KEYS = [
+  "ppi_api_key",
+  "ppi_api_secret",
+  "ppi_authorized_client",
+  "ppi_client_key",
+] as const;
+
+/** PPI credential commands compose multiple secrets calls — resolved before HTTP dispatch. */
+const invokePpiCredentialCommand = async <T>(
+  command: string,
+  payload?: Record<string, unknown>,
+): Promise<T> => {
+  if (command === "save_ppi_credentials") {
+    const { apiKey, apiSecret, authorizedClient, clientKey } = (payload ?? {}) as {
+      apiKey: string;
+      apiSecret: string;
+      authorizedClient: string;
+      clientKey: string;
+    };
+    const values = [apiKey, apiSecret, authorizedClient, clientKey];
+    for (let i = 0; i < PPI_SECRET_KEYS.length; i++) {
+      await invoke<void>("set_secret", { secretKey: PPI_SECRET_KEYS[i], secret: values[i] });
+    }
+    return undefined as T;
+  }
+  if (command === "delete_ppi_credentials") {
+    for (const key of [...PPI_SECRET_KEYS, "ppi_refresh_token"]) {
+      try {
+        await invoke<void>("delete_secret", { secretKey: key });
+      } catch {
+        // ignore — secret may not exist
+      }
+    }
+    return undefined as T;
+  }
+  // get_ppi_credentials_status
+  for (const key of PPI_SECRET_KEYS) {
+    const val = await invoke<string | null>("get_secret", { secretKey: key });
+    if (!val) return false as T;
+  }
+  return true as T;
+};
+
 export const invoke = async <T>(command: string, payload?: Record<string, unknown>): Promise<T> => {
   const config = COMMANDS[command];
   if (!config) throw new Error(`Unsupported command ${command}`);
+  if (
+    command === "save_ppi_credentials" ||
+    command === "delete_ppi_credentials" ||
+    command === "get_ppi_credentials_status"
+  ) {
+    return invokePpiCredentialCommand<T>(command, payload);
+  }
   let url = `${API_PREFIX}${config.path}`;
   let method = config.method;
   let body: BodyInit | undefined;
@@ -1693,6 +1753,15 @@ export const invoke = async <T>(command: string, payload?: Record<string, unknow
     case "restore_sync_session":
     case "list_broker_connections":
     case "list_broker_accounts":
+    case "sync_ppi_data": {
+      const { startDate, endDate } = (payload ?? {}) as { startDate?: string; endDate?: string };
+      const qs = new URLSearchParams();
+      if (startDate) qs.set("start_date", startDate);
+      if (endDate) qs.set("end_date", endDate);
+      const qstr = qs.toString();
+      if (qstr) url += `?${qstr}`;
+      break;
+    }
     case "sync_broker_data":
     case "broker_ingest_run":
     case "sync_broker_connections":

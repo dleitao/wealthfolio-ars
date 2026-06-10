@@ -1,6 +1,8 @@
 pub mod account;
 pub mod activity;
 pub mod addon;
+pub mod argentina;
+pub mod ppi_sync;
 pub mod ai_chat;
 pub mod ai_providers;
 pub mod allocation_targets;

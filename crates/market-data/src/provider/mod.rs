@@ -23,12 +23,17 @@ mod traits;
 
 // Provider implementations
 pub mod alpha_vantage;
+pub mod argentina_datos;
+pub mod balanz_fci;
 pub mod boerse_frankfurt;
+pub mod dolar_api;
 pub mod finnhub;
 pub mod fixture;
 pub mod marketdata_app;
 pub mod metal_price_api;
 pub mod openfigi;
+pub mod ppi;
+pub mod tradingview;
 pub mod us_treasury_calc;
 pub mod yahoo;
 

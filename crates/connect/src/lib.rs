@@ -35,3 +35,4 @@ pub use broker_ingest::{
     ReviewMode,
 };
 pub use platform::Platform;
+pub use platform::ppi::PpiApiClient;

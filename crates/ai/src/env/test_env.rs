@@ -182,6 +182,10 @@ impl AssetServiceTrait for MockAssetService {
         Ok(self.assets.clone())
     }
 
+    async fn enrich_xbue_sectors(&self) -> CoreResult<(usize, usize)> {
+        Ok((0, 0))
+    }
+
     fn get_asset_by_id(&self, asset_id: &str) -> CoreResult<Asset> {
         self.assets
             .iter()

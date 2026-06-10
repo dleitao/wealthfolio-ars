@@ -38,6 +38,7 @@ import { performanceHeadlineReturn, performancePeriodPnl } from "@/lib/performan
 import { getPerformanceDateRangeForRequest } from "@/lib/performance-date-range";
 import { QueryKeys } from "@/lib/query-keys";
 import { useSettingsContext } from "@/lib/settings-provider";
+import { useCurrencyConversion } from "@/hooks/use-currency-conversion";
 import {
   Account,
   AccountValuation,
@@ -146,6 +147,7 @@ const AccountPage = () => {
   const { settings } = useSettingsContext();
   const baseCurrency = settings?.baseCurrency ?? "USD";
   const appTimezone = settings?.timezone?.trim() || undefined;
+  const { convert, displayCurrencyCode } = useCurrencyConversion();
   const { id = "" } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [dateRange, setDateRange] = useState<DateRange | undefined>(getInitialDateRange());
@@ -406,11 +408,6 @@ const AccountPage = () => {
 
   const frontendGainLossAmount = performancePeriodPnl(accountPerformance);
   const frontendSimpleReturn = performanceHeadlineReturn(accountPerformance);
-  const displayedValueCurrency =
-    account?.currency ?? currentValuation?.accountCurrency ?? baseCurrency;
-  const performanceCurrency = accountPerformance?.scope.currency ?? baseCurrency;
-  const showPerformanceCurrency =
-    performanceCurrency.toUpperCase() !== displayedValueCurrency.toUpperCase();
 
   const chartData: HistoryChartData[] = useMemo(() => {
     if (!valuationHistory) return [];
@@ -689,8 +686,15 @@ const AccountPage = () => {
                         <div>
                           <p className="pt-3 text-xl font-bold">
                             <PrivacyAmount
-                              value={currentValuation?.totalValue ?? 0}
-                              currency={displayedValueCurrency}
+                              value={
+                                convert(
+                                  currentValuation?.totalValue ?? 0,
+                                  account?.currency ?? baseCurrency,
+                                ) ??
+                                currentValuation?.totalValue ??
+                                0
+                              }
+                              currency={displayCurrencyCode()}
                             />
                           </p>
                           {!hasPerformanceError && (
@@ -702,9 +706,14 @@ const AccountPage = () => {
                               ) : (
                                 <GainAmount
                                   className="text-sm font-light"
-                                  value={frontendGainLossAmount}
-                                  currency={performanceCurrency}
-                                  displayCurrency={showPerformanceCurrency}
+                                  value={
+                                    convert(
+                                      frontendGainLossAmount,
+                                      account?.currency ?? baseCurrency,
+                                    ) ?? frontendGainLossAmount
+                                  }
+                                  currency={displayCurrencyCode()}
+                                  displayCurrency={false}
                                 />
                               )}
                               {percentageToDisplay == null ? (

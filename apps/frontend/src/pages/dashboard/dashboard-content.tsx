@@ -1,6 +1,7 @@
 import { calculatePerformanceSummary } from "@/adapters";
 import { HistoryChart } from "@/components/history-chart";
 import { useHapticFeedback } from "@/hooks";
+import { useCurrencyConversion } from "@/hooks/use-currency-conversion";
 import { useHoldings } from "@/hooks/use-holdings";
 import { useValuationHistory } from "@/hooks/use-valuation-history";
 import { HoldingType, isAlternativeAssetKind } from "@/lib/constants";
@@ -113,6 +114,8 @@ export function DashboardContent() {
   const { settings } = useSettingsContext();
   const baseCurrency = settings?.baseCurrency ?? "USD";
 
+  const { convert, displayCurrencyCode } = useCurrencyConversion();
+
   const startDate =
     !isAllTime && dateRange?.from ? format(dateRange.from, "yyyy-MM-dd") : undefined;
   const endDate = !isAllTime && dateRange?.to ? format(dateRange.to, "yyyy-MM-dd") : undefined;
@@ -143,16 +146,25 @@ export function DashboardContent() {
       : null;
   }, [valuationHistory]);
 
+  const displayCurrency = displayCurrencyCode();
+  const displayedTotalValue = convert(totalValue, baseCurrency) ?? totalValue;
+  const displayedGainLoss =
+    gainLossAmount == null ? null : (convert(gainLossAmount, baseCurrency) ?? gainLossAmount);
+
   const chartData = useMemo(() => {
     return (
-      valuationHistory?.map((item) => ({
-        date: item.valuationDate,
-        totalValue: item.totalValueBase,
-        netContribution: item.netContributionBase,
-        currency: item.baseCurrency ?? baseCurrency,
-      })) ?? []
+      valuationHistory?.map((item) => {
+        const itemCurrency = item.baseCurrency ?? baseCurrency;
+        return {
+          date: item.valuationDate,
+          totalValue: convert(item.totalValueBase, itemCurrency) ?? item.totalValueBase,
+          netContribution:
+            convert(item.netContributionBase, itemCurrency) ?? item.netContributionBase,
+          currency: displayCurrency,
+        };
+      }) ?? []
     );
-  }, [valuationHistory, baseCurrency]);
+  }, [valuationHistory, baseCurrency, convert, displayCurrency]);
 
   const chartMinDomainSpanRatio = useMemo(
     () => getDashboardChartMinDomainSpanRatio(selectedInterval),
@@ -185,8 +197,8 @@ export function DashboardContent() {
             <div>
               <Balance
                 isLoading={isHoldingsLoading}
-                targetValue={totalValue}
-                currency={baseCurrency}
+                targetValue={displayedTotalValue}
+                currency={displayCurrency}
                 displayCurrency={true}
               />
               <div className="text-md flex space-x-3">
@@ -198,15 +210,15 @@ export function DashboardContent() {
                   </div>
                 ) : (
                   <>
-                    {gainLossAmount == null ? (
+                    {displayedGainLoss == null ? (
                       <span className="text-muted-foreground lg:text-md text-sm font-light">
                         N/A
                       </span>
                     ) : (
                       <GainAmount
                         className="lg:text-md text-sm font-light"
-                        value={gainLossAmount}
-                        currency={baseCurrency}
+                        value={displayedGainLoss}
+                        currency={displayCurrency}
                         displayCurrency={false}
                       />
                     )}

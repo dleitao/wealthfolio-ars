@@ -2251,6 +2251,123 @@ impl AssetServiceTrait for AssetService {
         Ok((enriched_count, skipped_count, failed_count))
     }
 
+    async fn enrich_xbue_sectors(&self) -> Result<(usize, usize)> {
+        let xbue_assets: Vec<Asset> = self
+            .asset_repository
+            .list()?
+            .into_iter()
+            .filter(|a| a.instrument_exchange_mic.as_deref() == Some("XBUE"))
+            .collect();
+
+        if xbue_assets.is_empty() {
+            return Ok((0, 0));
+        }
+
+        let symbols: Vec<&str> = xbue_assets
+            .iter()
+            .filter_map(|a| a.display_code.as_deref().or(a.instrument_symbol.as_deref()))
+            .collect();
+
+        let http = reqwest::Client::new();
+        let profiles =
+            wealthfolio_market_data::provider::tradingview::TradingViewArgentinaProvider::fetch_profiles_batch(
+                &http, &symbols,
+            )
+            .await
+            .map_err(|e| {
+                Error::MarketData(crate::quotes::MarketDataError::ProviderError(format!(
+                    "TradingView batch fetch failed: {}",
+                    e
+                )))
+            })?;
+
+        let mut classified = 0usize;
+        let mut not_found = 0usize;
+        let mut updated_ids: Vec<String> = Vec::new();
+
+        for asset in &xbue_assets {
+            let symbol = match asset.display_code.as_deref().or(asset.instrument_symbol.as_deref()) {
+                Some(s) => s,
+                None => {
+                    not_found += 1;
+                    continue;
+                }
+            };
+
+            let Some(tv_profile) = profiles.get(symbol) else {
+                not_found += 1;
+                continue;
+            };
+
+            // Merge sector/country into the existing $.profile metadata object
+            let mut updated_meta = match &asset.metadata {
+                Some(m) => m.as_object().cloned().unwrap_or_default(),
+                None => serde_json::Map::new(),
+            };
+            let mut profile_meta = updated_meta
+                .get("profile")
+                .and_then(|p| p.as_object())
+                .cloned()
+                .unwrap_or_default();
+
+            if let Some(sector) = &tv_profile.sector {
+                profile_meta.insert("sectors".to_string(), serde_json::Value::String(sector.clone()));
+            }
+            if let Some(country) = &tv_profile.country {
+                profile_meta.insert(
+                    "countries".to_string(),
+                    serde_json::Value::String(country.clone()),
+                );
+            }
+            updated_meta.insert("profile".to_string(), serde_json::Value::Object(profile_meta));
+
+            let update = UpdateAssetProfile {
+                display_code: asset.display_code.clone(),
+                name: asset.name.clone(),
+                notes: asset.notes.clone().unwrap_or_default(),
+                kind: None,
+                quote_mode: Some(asset.quote_mode),
+                quote_ccy: Some(asset.quote_ccy.clone()),
+                instrument_type: asset.instrument_type.clone(),
+                instrument_symbol: None,
+                instrument_exchange_mic: None,
+                provider_config: asset.provider_config.clone(),
+                metadata: Some(serde_json::Value::Object(updated_meta)),
+            };
+
+            match self.asset_repository.update_profile(&asset.id, update).await {
+                Ok(_) => {
+                    if let Some(taxonomy_service) = &self.taxonomy_service {
+                        let input = ClassificationInput::from_provider_profile(
+                            None,
+                            asset.name.as_deref(),
+                            None,
+                            tv_profile.sector.as_deref(),
+                            None,
+                            tv_profile.country.as_deref(),
+                            Some("XBUE"),
+                        );
+                        let _ = AutoClassificationService::new(Arc::clone(taxonomy_service))
+                            .classify_asset(&asset.id, &input)
+                            .await;
+                    }
+                    updated_ids.push(asset.id.clone());
+                    classified += 1;
+                }
+                Err(e) => {
+                    warn!("Failed to update XBUE sector for {}: {}", asset.id, e);
+                    not_found += 1;
+                }
+            }
+        }
+
+        if !updated_ids.is_empty() {
+            self.event_sink.emit(DomainEvent::assets_updated(updated_ids));
+        }
+
+        Ok((classified, not_found))
+    }
+
     async fn cleanup_legacy_metadata(&self, asset_id: &str) -> Result<()> {
         self.asset_repository
             .cleanup_legacy_metadata(asset_id)

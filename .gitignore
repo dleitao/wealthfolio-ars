@@ -94,6 +94,11 @@ Thumbs.db
 .codex/
 .kiro/
 .conductor/
+.continue/
+
+# Docs personales / contexto AI
+security-review.md
+wealthfolio-argentina-context.md
 db/
 apps/db/
 apps/tauri/db/

@@ -1735,6 +1735,10 @@ mod tests {
         ) -> Result<Vec<AssetResolutionOutput>> {
             unimplemented!("unused in holdings service tests")
         }
+
+        async fn enrich_xbue_sectors(&self) -> Result<(usize, usize)> {
+            Ok((0, 0))
+        }
     }
 
     struct MockSnapshotService {
@@ -1866,6 +1870,16 @@ mod tests {
     impl FxServiceTrait for MockFxService {
         fn initialize(&self) -> Result<()> {
             Ok(())
+        }
+
+        async fn save_historical_fx_quotes(
+            &self,
+            _from_currency: &str,
+            _to_currency: &str,
+            _quotes: Vec<(NaiveDate, Decimal)>,
+            _source: &str,
+        ) -> Result<usize> {
+            Ok(0)
         }
 
         fn get_historical_rates(

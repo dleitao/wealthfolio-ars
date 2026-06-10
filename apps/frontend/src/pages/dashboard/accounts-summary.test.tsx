@@ -6,6 +6,7 @@ import { calculatePerformanceSummaries } from "@/adapters";
 import { useAccounts } from "@/hooks/use-accounts";
 import { useLatestValuations } from "@/hooks/use-latest-valuations";
 import { useSettingsContext } from "@/lib/settings-provider";
+import { DisplayCurrencyProvider } from "@/context/display-currency-context";
 import type {
   Account,
   AccountValuation,
@@ -37,6 +38,13 @@ vi.mock("@/lib/settings-provider", () => ({
 
 vi.mock("@tanstack/react-query", () => ({
   useQuery: vi.fn(),
+}));
+
+vi.mock("@/hooks/use-currency-conversion", () => ({
+  useCurrencyConversion: () => ({
+    convert: (amount: number) => amount,
+    displayCurrencyCode: () => "USD",
+  }),
 }));
 
 vi.mock("@wealthfolio/ui", () => ({
@@ -289,7 +297,9 @@ function renderAccountsSummary({
 
   return render(
     <MemoryRouter>
-      <AccountsSummary />
+      <DisplayCurrencyProvider>
+        <AccountsSummary />
+      </DisplayCurrencyProvider>
     </MemoryRouter>,
   );
 }

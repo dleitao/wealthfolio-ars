@@ -19,6 +19,13 @@ vi.mock("@/hooks", () => ({
   useHapticFeedback: () => ({ triggerHaptic: vi.fn() }),
 }));
 
+vi.mock("@/hooks/use-currency-conversion", () => ({
+  useCurrencyConversion: () => ({
+    convert: (amount: number) => amount,
+    displayCurrencyCode: () => "USD",
+  }),
+}));
+
 vi.mock("@/hooks/use-holdings", () => ({
   useHoldings: vi.fn(),
 }));
