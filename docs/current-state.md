@@ -1,137 +1,85 @@
-# Estado actual — feature/ars-brokers
+# Estado actual — feature/ars-brokers-rebase
 
-_Última actualización: 2026-06-09 (sesión 2)_
+_Última actualización: 2026-06-10_
 
 ## Cambios realizados
 
-### Feature: display currency propagado a toda la app
+### Rebase completo a upstream v3.5.2
 
-El selector de moneda (ARS / USD Oficial / USD MEP / USD CCL) de la sidebar ahora
-afecta todas las vistas de valores monetarios, no solo el dashboard.
+La rama `feature/ars-brokers-rebase` ahora es **main (v3.5.2) + 1 commit squash**
+(`c4eeae5e`) con todo el trabajo ARS portado. Los 92 commits originales quedaron
+preservados en `feature/ars-brokers` (v3.3.0, intacta como respaldo).
 
-**Patrón aplicado** en cada archivo:
-```ts
-const { convert, displayCurrencyCode } = useCurrencyConversion();
-const c = (v: number) => convert(v, sourceCurrency) ?? v;
-// <PrivacyAmount value={c(rawValue)} currency={displayCurrencyCode()} />
-```
+Los 30 conflictos se resolvieron en una sola pasada (squash-merge sobre main, no
+replay commit-a-commit). Áreas clave:
 
-**Archivos modificados**:
+**Performance service** — upstream reescribió el módulo (1.3k → 6.5k líneas) con
+nuevo modelo `PerformanceResult` (`returns.{twr,irr,value_return}`, `attribution`,
+`risk`, `data_quality`; ya no existen `period_gain`/`period_return`). El fix de
+sign-consistency se re-implementó:
+- HOLDINGS: `value_return = pnl_change / end_cost_basis` (en `compute_holdings_value_return`; se eliminó el parámetro `is_all_time` — fórmula unificada)
+- TRANSACTIONS: `compute_simple_value_return` = `gain / (start_value + net_cash_flow)` (capital desplegado)
+- Mixed-scope: misma fórmula, aplicada también a la serie por día (invariante: último punto de la serie == headline)
+- `effective_holdings_mode` (auto-fallback para cuentas sin depósitos) portado usando los helpers flow-basis (`return_net_contribution`, `return_cost_basis`)
+- 8 tests de upstream actualizados al nuevo denominador; test de regresión Balanz portado
 
-| Archivo | Qué se convierte |
-|---------|-----------------|
-| `holdings/components/holdings-table.tsx` | Columnas "Total Value" y "Unrealized Gain" en modo base. Portfolios mono-moneda forzados a modo base mediante `effectiveShowConverted = showConvertedValues \|\| !hasMultipleCurrencies` |
-| `holdings/components/cash-holdings-widget.tsx` | Total cash balance (los breakdowns por moneda local se mantienen en moneda nativa) |
-| `asset/asset-profile-page.tsx` | market value, cost basis, average price, todaysReturn, totalReturn del instrumento |
-| `account/account-metrics.tsx` | investmentMarketValue, costBasis, unrealizedPnL, netContribution, cashBalance |
-| `account/account-page.tsx` | Total portfolio (`currentValuation?.totalValue`) y period gain (`frontendGainLossAmount`) en el header de la cuenta |
-| `net-worth/net-worth-content.tsx` | Net worth total, gain/loss, y todos los ítems del BalanceSheet |
-| `income/income-page.tsx` | Total income, monthly average, dividends, interest, top stocks. El pie chart `byCurrency` no se toca (distribución original) |
+**Broker sync** — upstream pasó a arquitectura two-phase (`activity_phase.rs`,
+`holdings_phase.rs`). Upstream ya había incorporado `override_start_date/end_date`
+y `force_full_history` en `SyncConfig`. Se portó: campo `force_tracking_mode`,
+método `ensure_tracking_mode` en `BrokerSyncServiceTrait`, y su llamada
+post-`sync_accounts` en el orchestrator.
 
-**Test fix** (`accounts-summary.test.tsx`):
-- Agregado `DisplayCurrencyProvider` al wrapper de render
-- Mockeado `useCurrencyConversion` con `convert: (v) => v` y `displayCurrencyCode: () => "USD"` para aislar del contexto de tasas
+**Display currency** — re-aplicado sobre el frontend rediseñado de upstream:
+- `net-worth-content.tsx` (revamp completo): conversión en `parsedData` y en las historias parseadas → MomentumCard/VelocityCard/BreakdownTable heredan valores convertidos
+- `accounts-summary.tsx`: nueva API batched `calculatePerformanceSummaries` + `performanceSummaryScopeKey`
+- `holdings-table.tsx`: upstream eliminó el toggle `showTotalReturn` (ahora columnas separadas totalPnl/totalReturn/dayPnl); `convert`/`displayCurrencyCode` se pasan como parámetros a `getColumns`
+- `dashboard-content.tsx`: usa `performancePeriodPnl`/`performanceHeadlineReturn` de upstream + conversión; chart usa los nuevos campos `totalValueBase`/`netContributionBase`
+- `cash-holdings-widget.tsx` eliminado (upstream borró su único consumidor)
 
-### Fix: comisiones PPI no contabilizadas (API sync + XLSX)
+**Web adapter / PPI** — upstream agregó tests de paridad de comandos. Las
+credenciales PPI ahora van por `shared/ppi.ts` con intercepción en el `invoke()`
+web (componen llamadas a secrets); `adapters/web/ppi.ts` eliminado. Los 3 comandos
+de credenciales están registrados en `COMMANDS` (paths placeholder).
 
-**Root cause**: El mapper de PPI pasaba el `importe` total (qty × precio + comisión) en el campo `amount`, pero dejaba `fee = None`. El motor de snapshots calcula el cash como `depósitos - qty×precio - fees`, ignorando la comisión. Resultado: cash sobredeclarado en ~86k ARS.
+**Adaptaciones menores**: `supports_dividends: false` en los 4 providers ARS;
+`provider_id`/`provider_symbol: None` en los importers Balanz/PPI XLSX (campos
+nuevos de `ActivityImport`, fix #855); stubs de métodos ARS
+(`save_historical_fx_quotes`, `enrich_xbue_sectors`, `ensure_tracking_mode`) en
+mocks de tests de upstream (spending, ai, connect, core).
 
-**Fix aplicado en dos lugares**:
-- `crates/connect/src/platform/ppi/mapper.rs`: para BUY/SELL, calcula `fee = |amount| - qty × price` y lo pone en el campo `fee` del `AccountUniversalActivity`.
-- `crates/core/src/activities/ppi_xlsx_importer.rs`: misma lógica para el importer XLSX.
+### Infraestructura
 
-**Resultado post re-sync**: diferencia con la plataforma PPI ahora mínima.
-
-### Feature: importación XLSX PPI en el wizard
-
-**Frontend**:
-- `default-activity-template.ts`: `PPI_XLSX_TEMPLATE_ID = "system_ppi_xlsx"`, `isPpiXlsxTemplateId()`, `createPpiXlsxTemplate()`. `prependDefaultActivityTemplate()` incluye ambos templates (Balanz y PPI).
-- `upload-step.tsx`: `applyTemplate` hace early-return también para PPI. Prop `xlsxBrokerName: string | null` en `TemplateSelector` muestra el nombre del broker correcto.
-
-**Backend**:
-- `xlsx_parser.rs`: auto-detecta PPI por presencia de hoja "Instrumentos".
-- `ppi_xlsx_importer.rs`: parsea las 8 hojas del XLSX de PPI.
-
-### Feature: importación XLSX Balanz completa (Tauri + Web)
-
-- `activity-import-page.tsx`: `handleBack` desde "assets" salta el paso "mapping" para imports XLSX.
-- `apps/server/src/api/activities.rs`: endpoint `POST /activities/import/parse-xlsx`.
-- `adapters/web/activities.ts`: `parseXlsx` vía fetch.
-
-### Feature: cauciones bursátiles en importer Balanz
-
-`balanz_importer.rs`: pre-pass `caucion_principals`, `APCOLCON` → skip, `APCOLFUT` → INTEREST neto.
-
-### Fix: period_return sign-consistent con period_gain (dashboard card)
-
-**Root cause**: en `compute_account_performance` (`crates/core/src/portfolio/performance/performance_service.rs`), `period_gain` y `period_return` medían cosas distintas y podían tener signos opuestos:
-
-- **HOLDINGS mode**: `period_return = end_unrealized_pnl / end_cost_basis` (ratio all-time) vs `period_gain` = delta del período. Cuando el portfolio estaba underwater al inicio pero subió, `period_gain > 0` y `period_return < 0`.
-- **TRANSACTIONS mode** (Balanz XLSX con DEPOSITs): `period_return = cumulative_mwr` (MWR compuesto diario). Pérdidas tempranas en bonos ARS producen factores pequeños que los depósitos posteriores no compensan en el producto compuesto, dando MWR ~ -95% con gain nominal positivo.
-
-**Fix**:
-- HOLDINGS: `period_gain / end_cost_basis` — siempre sign-consistent (dividir por positivo no cambia signo).
-- TRANSACTIONS: `gain_loss_amount / (start_value + net_cash_flow)` — gain relativo al capital total desplegado. Evita explosión por tiny-start-value Y evita distorsión del MWR compuesto.
-- Eliminado parámetro `_is_all_time` nunca usado de `compute_holdings_period_return`.
-- Test nuevo: `perf_holdings_mode_gain_and_return_same_sign_when_recovering_from_loss`.
-- Test renombrado: `perf_holdings_mode_period_return_sign_consistent`.
-
-### Bugs resueltos (histórico)
-
-- **Comisiones PPI invisibles** → `fee = amount - qty×price` en mapper y xlsx importer.
-- MEP/dólar-cable phantom SELL → FEE cuando `precio == -1` AND `importe < 0`.
-- Cuenta PPI creada como HOLDINGS → `force_tracking_mode: Transactions`.
-- 0 actividades PPI → ID determinístico.
-- Freeze servidor → `add_rates_to_converter()` incremental.
-- Sin `dateFrom` → fallback `2010-01-01`.
-- `effective_holdings_mode` auto-fallback sin modificar `tracking_mode`.
-- Dashboard card "+$X / -Y%": `period_return` sign-consistent con `period_gain` (sesión 2).
-
----
+- `origin/main` actualizado a v3.5.2 (fast-forward, 298 commits).
+- `pnpm install` requerido tras el rebase (deps nuevas de upstream).
 
 ## Decisiones tomadas
 
-- **Display currency**: modo Local (multi-moneda) = moneda del instrumento, sin conversión. Modo Base = display currency. Portfolios mono-moneda siempre tratan como modo Base.
-- **Pie chart `byCurrency` en Income**: no convertir, muestra distribución original por moneda.
-- **`EditableBalance` en account-metrics**: no convertir — es input de edición en moneda nativa.
-- **Comisión implícita en `fee`**: no modificar `unit_price` ni `amount` — extraer diferencia a `fee`.
-- **PPI XLSX template separado de Balanz**: IDs, funciones y hint text propios.
-- **`xlsxBrokerName: string | null`**: más expresivo que booleano.
-- **APCOLCON skip / APCOLFUT net interest**: capital de caución no abandona el portfolio.
-- **MEP sentinel `precio == -1` AND `importe < 0` → FEE**.
-- **`add_rates_to_converter` incremental**: evita O(n) reload.
-- **`period_return` = `gain / (start + net_cash_flow)`**: no MWR compuesto — evita distorsión en ARS volátil y mantiene sign-consistency con el monto mostrado en la UI.
-
----
+- **Squash-merge, no rebase literal**: una pasada de conflictos en vez de 92 replays. Historia granular preservada en `feature/ars-brokers`.
+- **Denominador de capital desplegado** (`start + net_cash_flow`) para value_return en TRANSACTIONS/mixed — reemplaza `gain/start_value` de upstream. Sign-consistent, maneja tiny-start-value y zero-start (un test de upstream que esperaba N/A con start=0 ahora espera 0%).
+- **La serie mixed-scope usa el mismo denominador** que el headline (invariante preservado). En TRANSACTIONS single-account la serie sigue siendo TWR (mode `TimeWeighted` → el headline del frontend es TWR, no value_return).
+- **`is_holdings_mode` reportado = `effective_holdings_mode`** (incluye el fallback).
+- **Credenciales PPI web**: composición client-side sobre secrets, interceptada en `invoke()` antes del dispatch HTTP.
+- **EditableBalance**: sigue en moneda nativa de la cuenta (input de edición).
 
 ## Pendientes
 
-- **Tasas ARS históricas para Balanz-only**: `sync_dolar_ars_rates()` solo se llama desde sync PPI. Plan en `/home/daniel/.claude/plans/snug-wandering-wave.md` (Fix 2).
-- **Mobile holdings table** (`holdings-table-mobile.tsx`): aún muestra valores en `localCurrency` sin conversión — explícitamente fuera de scope por el usuario.
-- **`HoldingsGroupedTable`** y **`NetWorthWidget`**: componentes con valores sin convertir, pero actualmente sin usages en la app.
-- **Tests de integración PPI**: ningún test cubre el flujo completo sync → actividades → valuación.
-- **2 tests pre-existentes fallando**: `adapter-command-parity.test.ts` (1) y `sell-form.test.tsx` (1) — no relacionados con display currency.
-
----
+- **Verificación manual en app**: `pnpm tauri dev` — dashboard Balanz/PPI, signo del %, selector de moneda, import XLSX, sync PPI. Nada de esto se probó en runtime aún.
+- **2 tests frontend fallan por locale es_AR**: `asset-classification-tool-utils.test.ts` (`33,33%` vs `33.33%`) y `sell-form.test.tsx` (`100.000` vs `100,000`). Tests de upstream que asumen en-US; correr con `LANG=en_US.UTF-8` o parchear.
+- **Tasas ARS históricas para Balanz-only**: `sync_dolar_ars_rates()` solo se llama desde sync PPI (plan `snug-wandering-wave.md`, Fix 2).
+- **Decidir destino de `feature/ars-brokers`**: borrar o archivar una vez validada la rama rebased.
+- **Features v3.5 sin explorar**: spending tracker, lots/disposals, rebalance planner, allocation targets — disponibles pero sin configurar para el caso ARS.
 
 ## Riesgos
 
-- **Re-sync con "Desde" vacío reimporta todo**: IDs determinísticos evitan duplicados, pero registros huérfanos posibles si PPI cambió datos históricos.
-- **Boletos no consecutivos en cauciones Balanz**: fallback emite el importe completo como interés (error conservador, visible en UI).
-- **Tasas FX no disponibles al cargar**: `convert()` retorna `undefined` → fallback al valor raw en la moneda original. El usuario ve valores sin convertir hasta que las tasas cargan (comportamiento aceptable, no crashea).
-- **`period_return` nuevo vs account-detail page**: la página de detalle de cuenta usa `periodReturn` del mismo campo — con el nuevo cálculo ambas vistas muestran el mismo número, pero ya no es MWR. Si en el futuro se quiere MWR en la página de detalle, habría que separar los campos.
-
----
+- **Headline TWR en TRANSACTIONS mode**: el dashboard de cuenta usa `performanceHeadlineReturn` que devuelve TWR (compuesto diario) cuando mode=TimeWeighted — puede divergir en signo del gain en escenarios ARS extremos. El card de accounts-summary usa `SimplePerformanceMetrics` (`gain/net_contribution`, sign-consistent). Si reaparece el bug "+$X / -Y%", revisar qué campo consume esa vista.
+- **Migrations ARS corren antes que las de upstream** (timestamps 05-12..05-17 vs 05-19+). Sin colisión detectada, pero una DB ya migrada con la rama vieja no se probó contra las migrations nuevas de upstream (lots, spending, portfolios).
+- **Conversión en asset-profile**: `fxEffect` se convierte desde baseCurrency (no localCurrency) — revisar visualmente que el card de detalle muestre valores coherentes.
 
 ## Próxima tarea recomendada
 
-**Verificar que el % de Balanz ahora es razonable** post-rebuild:
-- Reconstruir con `pnpm tauri dev`.
-- Confirmar que la tarjeta Balanz muestra `period_gain` y `period_return` con el mismo signo.
-- Si el % sigue llamando la atención (ej. 18% en un período donde los precios bajaron), evaluar si el denominador `start_value + net_cash_flow` es el correcto para el contexto ARS.
-
-**Tasas ARS históricas para cuentas Balanz-only** (Fix 2 del plan `snug-wandering-wave.md`):
-
-1. `sync_dolar_ars_rates()` ya está en `apps/tauri/src/commands/argentina.rs` como `pub(crate)`.
-2. Llamarla después de confirmar un ImportRun de Balanz XLSX — detectar `source_system == "BALANZ"` en el comando de confirm.
-3. Verificar: `SELECT count(*) FROM exchange_rates WHERE from_currency='ARS'` antes y después.
+**Validar la rama rebased en runtime**:
+1. `pnpm tauri dev` con la DB real — confirmar que las migrations de upstream aplican sin error sobre la DB existente.
+2. Dashboard: tarjeta Balanz con gain y % del mismo signo; selector ARS/USD MEP/CCL en todas las vistas.
+3. Sync PPI end-to-end (two-phase nuevo) — verificar que `force_tracking_mode` sigue forzando TRANSACTIONS.
+4. Import XLSX Balanz y PPI por el wizard.
+5. Si todo pasa: merge a una rama estable y decidir el destino de `feature/ars-brokers`.
