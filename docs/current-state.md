@@ -1,85 +1,122 @@
 # Estado actual — feature/ars-brokers-rebase
 
-_Última actualización: 2026-06-10_
+_Última actualización: 2026-06-11_
 
 ## Cambios realizados
 
-### Rebase completo a upstream v3.5.2
+### Rebase a upstream v3.5.2 (2026-06-10)
 
-La rama `feature/ars-brokers-rebase` ahora es **main (v3.5.2) + 1 commit squash**
-(`c4eeae5e`) con todo el trabajo ARS portado. Los 92 commits originales quedaron
-preservados en `feature/ars-brokers` (v3.3.0, intacta como respaldo).
+`feature/ars-brokers-rebase` = main (v3.5.2) + 1 commit squash (`c4eeae5e`).
+Los 92 commits originales quedan en `feature/ars-brokers` (v3.3.0, respaldo).
+Áreas re-portadas sobre el código nuevo de upstream:
 
-Los 30 conflictos se resolvieron en una sola pasada (squash-merge sobre main, no
-replay commit-a-commit). Áreas clave:
+- **Performance**: modelo nuevo `PerformanceResult` (`returns.{twr,irr,value_return}`,
+  `mode`, `attribution`, `series`; ya no existen `period_gain/period_return`).
+  Fix sign-consistency re-implementado: HOLDINGS `value_return = pnl_change /
+  end_cost_basis`; TRANSACTIONS `compute_simple_value_return = gain /
+  (start_value + net_cash_flow)`; `effective_holdings_mode` (auto-fallback sin
+  depósitos). 8 tests upstream adaptados + regresión Balanz.
+- **Broker sync**: arquitectura two-phase de upstream; portado
+  `force_tracking_mode` + `ensure_tracking_mode` en el orchestrator.
+- **Display currency**: re-aplicado sobre el frontend rediseñado
+  (net-worth, accounts-summary batched, holdings-table, dashboard).
+- **PPI web**: credenciales por `shared/ppi.ts` con intercepción en `invoke()`.
 
-**Performance service** — upstream reescribió el módulo (1.3k → 6.5k líneas) con
-nuevo modelo `PerformanceResult` (`returns.{twr,irr,value_return}`, `attribution`,
-`risk`, `data_quality`; ya no existen `period_gain`/`period_return`). El fix de
-sign-consistency se re-implementó:
-- HOLDINGS: `value_return = pnl_change / end_cost_basis` (en `compute_holdings_value_return`; se eliminó el parámetro `is_all_time` — fórmula unificada)
-- TRANSACTIONS: `compute_simple_value_return` = `gain / (start_value + net_cash_flow)` (capital desplegado)
-- Mixed-scope: misma fórmula, aplicada también a la serie por día (invariante: último punto de la serie == headline)
-- `effective_holdings_mode` (auto-fallback para cuentas sin depósitos) portado usando los helpers flow-basis (`return_net_contribution`, `return_cost_basis`)
-- 8 tests de upstream actualizados al nuevo denominador; test de regresión Balanz portado
+### Fix headline sign-consistency (2026-06-11)
 
-**Broker sync** — upstream pasó a arquitectura two-phase (`activity_phase.rs`,
-`holdings_phase.rs`). Upstream ya había incorporado `override_start_date/end_date`
-y `force_full_history` en `SyncConfig`. Se portó: campo `force_tracking_mode`,
-método `ensure_tracking_mode` en `BrokerSyncServiceTrait`, y su llamada
-post-`sync_accounts` en el orchestrator.
+Bug "+$X / -Y%" en cuentas Balanz TRANSACTIONS con depósitos: el backend ya
+calculaba `value_return` sign-consistent pero reporta `mode = TimeWeighted`, y
+`performanceHeadlineReturn` (frontend) elegía `returns.twr` — el TWR compuesto
+diario diverge en signo con pérdidas tempranas + depósitos grandes.
 
-**Display currency** — re-aplicado sobre el frontend rediseñado de upstream:
-- `net-worth-content.tsx` (revamp completo): conversión en `parsedData` y en las historias parseadas → MomentumCard/VelocityCard/BreakdownTable heredan valores convertidos
-- `accounts-summary.tsx`: nueva API batched `calculatePerformanceSummaries` + `performanceSummaryScopeKey`
-- `holdings-table.tsx`: upstream eliminó el toggle `showTotalReturn` (ahora columnas separadas totalPnl/totalReturn/dayPnl); `convert`/`displayCurrencyCode` se pasan como parámetros a `getColumns`
-- `dashboard-content.tsx`: usa `performancePeriodPnl`/`performanceHeadlineReturn` de upstream + conversión; chart usa los nuevos campos `totalValueBase`/`netContributionBase`
-- `cash-holdings-widget.tsx` eliminado (upstream borró su único consumidor)
+Fix: `apps/frontend/src/lib/performance.ts` — en modo `timeWeighted` el
+headline prefiere `valueReturn`, fallback a `twr` si es null. Cubre dashboard,
+accounts-summary (cuenta/grupo) y account-page (comparten la función).
+Tests: `performance.test.ts` (7 casos, incl. regresión Balanz).
 
-**Web adapter / PPI** — upstream agregó tests de paridad de comandos. Las
-credenciales PPI ahora van por `shared/ppi.ts` con intercepción en el `invoke()`
-web (componen llamadas a secrets); `adapters/web/ppi.ts` eliminado. Los 3 comandos
-de credenciales están registrados en `COMMANDS` (paths placeholder).
+### Seeding de quotes desde precios de trade en imports (2026-06-11)
 
-**Adaptaciones menores**: `supports_dividends: false` en los 4 providers ARS;
-`provider_id`/`provider_symbol: None` en los importers Balanz/PPI XLSX (campos
-nuevos de `ActivityImport`, fix #855); stubs de métodos ARS
-(`save_historical_fx_quotes`, `enrich_xbue_sectors`, `ensure_tracking_mode`) en
-mocks de tests de upstream (spending, ai, connect, core).
+Causa raíz de las métricas distorsionadas de Balanz: posiciones valuadas en $0
+durante meses (quotes PPI recién desde 2026-06-08; el import XLSX no generaba
+quotes, a diferencia del broker sync por API). El TWR componía días ficticios
+de -74%/-64%/+115%.
 
-### Infraestructura
+Implementado (espejo de `connect/src/broker/service.rs:514`):
+- `Quote::from_trade_price()` en `crates/core/src/quotes/model.rs`
+  (id `{asset_id}_{date}_BROKER`, OHLC = unit_price).
+- `ActivityService.with_quote_store(...)` + seeding en `import_activities`:
+  BUY/SELL con `asset_id` resuelto y `unit_price > 0`, dedup por asset+día,
+  error no aborta el import. Wiring en tauri (`providers.rs`) y server
+  (`main_lib.rs`). 2 tests + `MockImportQuoteStore` en
+  `activities_service_tests.rs`.
 
-- `origin/main` actualizado a v3.5.2 (fast-forward, 298 commits).
-- `pnpm install` requerido tras el rebase (deps nuevas de upstream).
+### Datos (DB `db/web-dev.db`)
+
+- Backup `db/web-dev.db.bak-2026-06-11`.
+- Borrada quote BROKER espuria YPFD `2024-08-16 @ 27.950` (ningún trade
+  coincide; congelaba el market value inicial de Balanz en 335.400).
 
 ## Decisiones tomadas
 
-- **Squash-merge, no rebase literal**: una pasada de conflictos en vez de 92 replays. Historia granular preservada en `feature/ars-brokers`.
-- **Denominador de capital desplegado** (`start + net_cash_flow`) para value_return en TRANSACTIONS/mixed — reemplaza `gain/start_value` de upstream. Sign-consistent, maneja tiny-start-value y zero-start (un test de upstream que esperaba N/A con start=0 ahora espera 0%).
-- **La serie mixed-scope usa el mismo denominador** que el headline (invariante preservado). En TRANSACTIONS single-account la serie sigue siendo TWR (mode `TimeWeighted` → el headline del frontend es TWR, no value_return).
-- **`is_holdings_mode` reportado = `effective_holdings_mode`** (incluye el fallback).
-- **Credenciales PPI web**: composición client-side sobre secrets, interceptada en `invoke()` antes del dispatch HTTP.
-- **EditableBalance**: sigue en moneda nativa de la cuenta (input de edición).
+- **Squash-merge, no rebase literal**; historia granular en `feature/ars-brokers`.
+- **Denominador capital desplegado** (`start + net_cash_flow`) para value_return
+  TRANSACTIONS/mixed; zero-start reporta 0% (test upstream adaptado).
+- **Headline % = value_return también en TRANSACTIONS, resuelto en frontend**:
+  cambiar `mode` en Rust rompería 3 asserts de upstream y el chart del
+  performance page. TWR/IRR siguen en performance page, etiquetados como tal.
+- **Seeding de quotes en el pipeline compartido de import** (no gateado a
+  Balanz): un precio de trade es válido venga de donde venga; mismo criterio
+  que el broker sync. Los parsers XLSX siguen puros.
+- **Backfill histórico = mecanismo existente** (`SyncMode::BackfillHistory` vía
+  `sync_market_data(refetch_all=true)`); PPI y BALANZ_FCI soportan histórico.
+  Descartado fallback de valuación a costo (invasivo en core upstream).
+- **`is_holdings_mode` reportado = `effective_holdings_mode`**.
+- **Credenciales PPI web**: composición client-side sobre secrets en `invoke()`.
+- **EditableBalance**: en moneda nativa de la cuenta.
 
 ## Pendientes
 
-- **Verificación manual en app**: `pnpm tauri dev` — dashboard Balanz/PPI, signo del %, selector de moneda, import XLSX, sync PPI. Nada de esto se probó en runtime aún.
-- **2 tests frontend fallan por locale es_AR**: `asset-classification-tool-utils.test.ts` (`33,33%` vs `33.33%`) y `sell-form.test.tsx` (`100.000` vs `100,000`). Tests de upstream que asumen en-US; correr con `LANG=en_US.UTF-8` o parchear.
-- **Tasas ARS históricas para Balanz-only**: `sync_dolar_ars_rates()` solo se llama desde sync PPI (plan `snug-wandering-wave.md`, Fix 2).
-- **Decidir destino de `feature/ars-brokers`**: borrar o archivar una vez validada la rama rebased.
-- **Features v3.5 sin explorar**: spending tracker, lots/disposals, rebalance planner, allocation targets — disponibles pero sin configurar para el caso ARS.
+- **Commit del trabajo de hoy** (working tree sin commitear: fix headline,
+  seeding de quotes, tests, docs).
+- **Re-import Balanz + backfill PPI** (usuario): borrar cuenta Balanz,
+  re-importar XLSX (siembra quotes BROKER), backfill con
+  `sync_market_data(refetch_all=true)` por asset (UI: asset page → refresh
+  history). Verificar con el script de métricas (replicar TWR/value_return
+  sobre `daily_account_valuation`) que desaparecen los días ficticios.
+- **Quotes BROKER huérfanas** (assets sin nombre, fechas 2024-2026 en
+  web-dev.db): identificar origen (¿holdings payload del broker sync?) y limpiar.
+- **Verificación runtime desktop**: `pnpm tauri dev` con DB real — migrations
+  upstream sobre DB existente, sync PPI two-phase, selector ARS/MEP/CCL.
+- **2 tests frontend fallan por locale es_AR** (`asset-classification-tool-utils`,
+  `sell-form`): asumen en-US; correr con `LANG=en_US.UTF-8` o parchear.
+- **Tasas ARS históricas para Balanz-only**: `sync_dolar_ars_rates()` solo se
+  llama desde sync PPI (plan `snug-wandering-wave.md`, Fix 2).
+- **Destino de `feature/ars-brokers`**: borrar/archivar tras validar la rebased.
+- **Features v3.5 sin explorar**: spending, lots, rebalance, allocation targets.
 
 ## Riesgos
 
-- **Headline TWR en TRANSACTIONS mode**: el dashboard de cuenta usa `performanceHeadlineReturn` que devuelve TWR (compuesto diario) cuando mode=TimeWeighted — puede divergir en signo del gain en escenarios ARS extremos. El card de accounts-summary usa `SimplePerformanceMetrics` (`gain/net_contribution`, sign-consistent). Si reaparece el bug "+$X / -Y%", revisar qué campo consume esa vista.
-- **Migrations ARS corren antes que las de upstream** (timestamps 05-12..05-17 vs 05-19+). Sin colisión detectada, pero una DB ya migrada con la rama vieja no se probó contra las migrations nuevas de upstream (lots, spending, portfolios).
-- **Conversión en asset-profile**: `fxEffect` se convierte desde baseCurrency (no localCurrency) — revisar visualmente que el card de detalle muestre valores coherentes.
+- **Headline residual**: si `value_return` es None (capital desplegado ≤ 0) el
+  headline cae a TWR y puede divergir en signo del gain. Raro, sin reporte.
+- **Seeding no cubre assets nuevos sin resolver en review**: el `asset_id`
+  definitivo se asigna post-import (enrichment) → primera importación de un
+  asset desconocido queda sin quote BROKER hasta el primer sync.
+- **Precedencia BROKER vs provider en valuación no verificada**: si un mismo
+  día tiene quote BROKER (trade) y quote PPI, no se confirmó cuál usa la
+  valuación. Revisar si aparecen valores raros post-backfill.
+- **Migrations ARS corren antes que las de upstream** (timestamps 05-12..05-17
+  vs 05-19+). DB ya migrada con la rama vieja no probada contra migrations
+  nuevas (lots, spending, portfolios).
+- **Conversión en asset-profile**: `fxEffect` se convierte desde baseCurrency —
+  revisar visualmente el card de detalle.
 
 ## Próxima tarea recomendada
 
-**Validar la rama rebased en runtime**:
-1. `pnpm tauri dev` con la DB real — confirmar que las migrations de upstream aplican sin error sobre la DB existente.
-2. Dashboard: tarjeta Balanz con gain y % del mismo signo; selector ARS/USD MEP/CCL en todas las vistas.
-3. Sync PPI end-to-end (two-phase nuevo) — verificar que `force_tracking_mode` sigue forzando TRANSACTIONS.
-4. Import XLSX Balanz y PPI por el wizard.
-5. Si todo pasa: merge a una rama estable y decidir el destino de `feature/ars-brokers`.
+**Cerrar el ciclo Balanz end-to-end** (web, `pnpm run dev:web`):
+1. Commit del trabajo de hoy.
+2. Borrar cuenta Balanz → re-importar XLSX → verificar quotes BROKER sembradas
+   (`SELECT source, COUNT(*), MIN(day), MAX(day) FROM quotes ... GROUP BY source`).
+3. Backfill PPI (`refetch_all=true`) → quotes desde ~2025-05.
+4. Recalcular y validar: punto de partida ≈ capital invertido (~1.5M, no 373K),
+   sin días de ±60-115%, gain y % del mismo signo en dashboard y account page.
+5. Si pasa: repetir verificación en desktop (`pnpm tauri dev`) y commitear.

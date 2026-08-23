@@ -1,6 +1,6 @@
 Rol: Software senior engineer
 
-Objetivo: evaluar si traer cambios del upstream causaria conflictos
+Objetivo: {{descripcion tarea}}
 
 
 Antes de implementar:

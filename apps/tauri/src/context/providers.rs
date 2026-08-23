@@ -357,7 +357,8 @@ pub async fn initialize_context(
             quote_service.clone(),
             core_import_run_repository,
         )
-        .with_event_sink(domain_event_sink.clone()),
+        .with_event_sink(domain_event_sink.clone())
+        .with_quote_store(market_data_repo.clone()),
     );
     let goal_service = Arc::new(GoalService::new(goal_repo.clone(), account_service.clone()));
     let limits_service = Arc::new(ContributionLimitService::new_with_timezone(

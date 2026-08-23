@@ -34,7 +34,10 @@ export function performanceHeadlineReturn(
 
   switch (result.mode) {
     case "timeWeighted":
-      return numberOrNull(result.returns.twr);
+      // Prefer valueReturn (gain / deployed capital): its sign always matches
+      // the PnL amount shown next to it, while daily-compounded TWR can
+      // diverge (e.g. early losses followed by large deposits).
+      return numberOrNull(result.returns.valueReturn) ?? numberOrNull(result.returns.twr);
     case "valueReturn":
     case "symbolPriceBased":
       return numberOrNull(result.returns.valueReturn);

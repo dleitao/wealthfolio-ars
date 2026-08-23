@@ -47,6 +47,41 @@ pub struct Quote {
     pub notes: Option<String>,
 }
 
+impl Quote {
+    /// Builds a BROKER-sourced quote from an observed trade price, so that
+    /// imported positions are valued from day one even when no market data
+    /// provider covers the trade date. Mirrors the quotes seeded by broker
+    /// sync (`connect::broker`): id `{asset_id}_{date}_BROKER`, OHLC = price.
+    pub fn from_trade_price(
+        asset_id: &str,
+        price: Decimal,
+        timestamp: DateTime<Utc>,
+        currency: &str,
+    ) -> Self {
+        let date_str = timestamp.format("%Y-%m-%d").to_string();
+        Self {
+            id: format!(
+                "{}_{}_{}",
+                asset_id,
+                date_str,
+                super::constants::DATA_SOURCE_BROKER
+            ),
+            asset_id: asset_id.to_string(),
+            timestamp,
+            open: price,
+            high: price,
+            low: price,
+            close: price,
+            adjclose: price,
+            volume: Decimal::ZERO,
+            currency: currency.to_string(),
+            data_source: super::constants::DATA_SOURCE_BROKER.to_string(),
+            created_at: Utc::now(),
+            notes: None,
+        }
+    }
+}
+
 // =============================================================================
 // Symbol Search Result
 // =============================================================================

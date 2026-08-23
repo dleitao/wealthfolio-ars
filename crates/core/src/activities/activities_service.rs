@@ -7,9 +7,9 @@ use std::sync::Arc;
 use crate::accounts::{account_types, Account, AccountServiceTrait};
 use crate::activities::activities_constants::{
     classify_import_activity, is_cash_symbol, is_garbage_symbol, requires_symbol,
-    ImportSymbolDisposition, ACTIVITY_TYPE_CREDIT, ACTIVITY_TYPE_FEE, ACTIVITY_TYPE_INTEREST,
-    ACTIVITY_TYPE_SPLIT, ACTIVITY_TYPE_TRANSFER_IN, ACTIVITY_TYPE_TRANSFER_OUT,
-    ACTIVITY_TYPE_WITHDRAWAL, PRICE_BEARING_ACTIVITY_TYPES,
+    ImportSymbolDisposition, ACTIVITY_TYPE_BUY, ACTIVITY_TYPE_CREDIT, ACTIVITY_TYPE_FEE,
+    ACTIVITY_TYPE_INTEREST, ACTIVITY_TYPE_SELL, ACTIVITY_TYPE_SPLIT, ACTIVITY_TYPE_TRANSFER_IN,
+    ACTIVITY_TYPE_TRANSFER_OUT, ACTIVITY_TYPE_WITHDRAWAL, PRICE_BEARING_ACTIVITY_TYPES,
 };
 use crate::activities::activities_errors::ActivityError;
 use crate::activities::activities_model::*;
@@ -30,7 +30,7 @@ use crate::events::{DomainEvent, DomainEventSink, NoOpDomainEventSink};
 use crate::fx::currency::{get_normalization_rule, normalize_amount, resolve_currency};
 use crate::fx::FxServiceTrait;
 use crate::quotes::constants::DATA_SOURCE_MANUAL;
-use crate::quotes::{Quote, QuoteServiceTrait};
+use crate::quotes::{Quote, QuoteServiceTrait, QuoteStore};
 use crate::Result;
 use log::warn;
 
@@ -107,6 +107,7 @@ pub struct ActivityService {
     quote_service: Arc<dyn QuoteServiceTrait>,
     import_run_repository: Option<Arc<dyn ImportRunRepositoryTrait>>,
     event_sink: Arc<dyn DomainEventSink>,
+    quote_store: Option<Arc<dyn QuoteStore>>,
 }
 
 #[derive(Clone, Copy)]
@@ -545,6 +546,7 @@ impl ActivityService {
             quote_service,
             import_run_repository: None,
             event_sink: Arc::new(NoOpDomainEventSink),
+            quote_store: None,
         }
     }
 
@@ -565,6 +567,7 @@ impl ActivityService {
             quote_service,
             import_run_repository: Some(import_run_repository),
             event_sink: Arc::new(NoOpDomainEventSink),
+            quote_store: None,
         }
     }
 
@@ -625,6 +628,13 @@ impl ActivityService {
     /// Events are emitted after successful mutations (create, update, delete).
     pub fn with_event_sink(mut self, event_sink: Arc<dyn DomainEventSink>) -> Self {
         self.event_sink = event_sink;
+        self
+    }
+
+    /// Sets the quote store used to seed BROKER quotes from imported trade
+    /// prices. Without it, imports skip quote seeding (previous behavior).
+    pub fn with_quote_store(mut self, quote_store: Arc<dyn QuoteStore>) -> Self {
+        self.quote_store = Some(quote_store);
         self
     }
 
@@ -4741,6 +4751,36 @@ impl ActivityServiceTrait for ActivityService {
             .collect();
         let earliest_at = Self::earliest_new_activity_at_utc(insertable_new_activities.iter());
 
+        // Quotes from trade prices (dedup by asset+date, last write wins), so
+        // imported positions are valued even before provider history exists.
+        // Mirrors the seeding done by broker sync (connect::broker).
+        let trade_quotes: Vec<Quote> = if self.quote_store.is_some() {
+            let mut quotes_map: HashMap<String, Quote> = HashMap::new();
+            for activity in &insertable_new_activities {
+                if activity.activity_type != ACTIVITY_TYPE_BUY
+                    && activity.activity_type != ACTIVITY_TYPE_SELL
+                {
+                    continue;
+                }
+                let Some(asset_id) = activity.get_symbol_id() else {
+                    continue;
+                };
+                let Some(price) = activity.unit_price.filter(|p| *p > Decimal::ZERO) else {
+                    continue;
+                };
+                let Some(timestamp) = Self::parse_activity_timestamp_utc(&activity.activity_date)
+                else {
+                    continue;
+                };
+                let quote =
+                    Quote::from_trade_price(asset_id, price, timestamp, &activity.currency);
+                quotes_map.insert(quote.id.clone(), quote);
+            }
+            quotes_map.into_values().collect()
+        } else {
+            Vec::new()
+        };
+
         // ── 9. Insert all non-duplicate activities in one transaction ────────
         let inserted_count = if insertable_new_activities.is_empty() {
             0
@@ -4763,6 +4803,16 @@ impl ActivityServiceTrait for ActivityService {
                 }
             }
         };
+
+        // ── 9b. Seed BROKER quotes from imported trade prices ────────────────
+        if inserted_count > 0 && !trade_quotes.is_empty() {
+            if let Some(ref quote_store) = self.quote_store {
+                match quote_store.upsert_quotes(&trade_quotes).await {
+                    Ok(count) => debug!("Seeded {} quotes from imported trade prices", count),
+                    Err(e) => warn!("Failed to seed quotes from imported trade prices: {}", e),
+                }
+            }
+        }
 
         // ── 10. Finalize ImportRun ────────────────────────────────────────────
         if let Some(ref repo) = self.import_run_repository {

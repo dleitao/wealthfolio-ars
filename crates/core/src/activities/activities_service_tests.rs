@@ -22,8 +22,9 @@ mod tests {
     };
     use crate::quotes::service::ProviderInfo;
     use crate::quotes::{
-        LatestQuotePair, LatestQuoteSnapshot, Quote, QuoteImport, QuoteServiceTrait,
-        QuoteSyncState, ResolvedQuote, SymbolSearchResult, SymbolSyncPlan, SyncMode, SyncResult,
+        AssetId, Day, LatestQuotePair, LatestQuoteSnapshot, Quote, QuoteImport, QuoteServiceTrait,
+        QuoteSource, QuoteStore, QuoteSyncState, ResolvedQuote, SymbolSearchResult, SymbolSyncPlan,
+        SyncMode, SyncResult,
     };
     use async_trait::async_trait;
     use chrono::{DateTime, NaiveDate, Utc};
@@ -9602,5 +9603,332 @@ mod tests {
             }
             event => panic!("expected ActivitiesChanged, got {event:?}"),
         }
+    }
+
+    // --- Mock QuoteStore (records upserted quotes; reads unused by import) ---
+    #[derive(Clone, Default)]
+    struct MockImportQuoteStore {
+        quotes: Arc<Mutex<Vec<Quote>>>,
+    }
+
+    impl MockImportQuoteStore {
+        fn new() -> Self {
+            Self::default()
+        }
+
+        fn get_all(&self) -> Vec<Quote> {
+            self.quotes.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait]
+    impl QuoteStore for MockImportQuoteStore {
+        async fn save_quote(&self, quote: &Quote) -> Result<Quote> {
+            self.quotes.lock().unwrap().push(quote.clone());
+            Ok(quote.clone())
+        }
+
+        async fn delete_quote(&self, _quote_id: &str) -> Result<()> {
+            Ok(())
+        }
+
+        async fn upsert_quotes(&self, quotes_to_upsert: &[Quote]) -> Result<usize> {
+            let mut quotes = self.quotes.lock().unwrap();
+            for quote in quotes_to_upsert {
+                quotes.retain(|q| q.id != quote.id);
+                quotes.push(quote.clone());
+            }
+            Ok(quotes_to_upsert.len())
+        }
+
+        async fn delete_quotes_for_asset(&self, _asset_id: &AssetId) -> Result<usize> {
+            Ok(0)
+        }
+
+        async fn delete_provider_quotes_for_asset(&self, _asset_id: &AssetId) -> Result<usize> {
+            Ok(0)
+        }
+
+        fn latest(
+            &self,
+            _asset_id: &AssetId,
+            _source: Option<&QuoteSource>,
+        ) -> Result<Option<Quote>> {
+            Ok(None)
+        }
+
+        fn range(
+            &self,
+            _asset_id: &AssetId,
+            _start: Day,
+            _end: Day,
+            _source: Option<&QuoteSource>,
+        ) -> Result<Vec<Quote>> {
+            Ok(Vec::new())
+        }
+
+        fn latest_batch(
+            &self,
+            _asset_ids: &[AssetId],
+            _source: Option<&QuoteSource>,
+        ) -> Result<HashMap<AssetId, Quote>> {
+            Ok(HashMap::new())
+        }
+
+        fn latest_with_previous(
+            &self,
+            _asset_ids: &[AssetId],
+        ) -> Result<HashMap<AssetId, LatestQuotePair>> {
+            Ok(HashMap::new())
+        }
+
+        fn get_quote_bounds_for_assets(
+            &self,
+            _asset_ids: &[String],
+            _source: &str,
+        ) -> Result<HashMap<String, (NaiveDate, NaiveDate)>> {
+            Ok(HashMap::new())
+        }
+
+        fn get_latest_quote(&self, _symbol: &str) -> Result<Quote> {
+            Err(Error::Unexpected("not used in tests".into()))
+        }
+
+        fn get_latest_quotes(&self, _symbols: &[String]) -> Result<HashMap<String, Quote>> {
+            Ok(HashMap::new())
+        }
+
+        fn get_latest_quotes_as_of(
+            &self,
+            _symbols: &[String],
+            _as_of: NaiveDate,
+        ) -> Result<HashMap<String, Quote>> {
+            Ok(HashMap::new())
+        }
+
+        fn get_latest_quotes_pair(
+            &self,
+            _symbols: &[String],
+        ) -> Result<HashMap<String, LatestQuotePair>> {
+            Ok(HashMap::new())
+        }
+
+        fn get_historical_quotes(&self, _symbol: &str) -> Result<Vec<Quote>> {
+            Ok(Vec::new())
+        }
+
+        fn get_all_historical_quotes(&self) -> Result<Vec<Quote>> {
+            Ok(Vec::new())
+        }
+
+        fn get_quotes_in_range(
+            &self,
+            _symbol: &str,
+            _start: NaiveDate,
+            _end: NaiveDate,
+        ) -> Result<Vec<Quote>> {
+            Ok(Vec::new())
+        }
+
+        fn find_duplicate_quotes(&self, _symbol: &str, _date: NaiveDate) -> Result<Vec<Quote>> {
+            Ok(Vec::new())
+        }
+    }
+
+    fn balanz_like_import(
+        date: &str,
+        activity_type: &str,
+        symbol: &str,
+        quantity: Option<Decimal>,
+        unit_price: Option<Decimal>,
+        amount: Option<Decimal>,
+        line_number: i32,
+    ) -> ActivityImport {
+        ActivityImport {
+            id: None,
+            date: date.to_string(),
+            symbol: symbol.to_string(),
+            activity_type: activity_type.to_string(),
+            quantity,
+            unit_price,
+            currency: "ARS".to_string(),
+            fee: Some(dec!(0)),
+            amount,
+            comment: None,
+            account_id: Some("acc-ars".to_string()),
+            account_name: None,
+            symbol_name: None,
+            exchange_mic: if symbol.is_empty() {
+                None
+            } else {
+                Some("XBUE".to_string())
+            },
+            quote_ccy: Some("ARS".to_string()),
+            instrument_type: if symbol.is_empty() {
+                None
+            } else {
+                Some("EQUITY".to_string())
+            },
+            quote_mode: if symbol.is_empty() {
+                None
+            } else {
+                Some("MARKET".to_string())
+            },
+            provider_id: None,
+            provider_symbol: None,
+            errors: None,
+            warnings: None,
+            duplicate_of_id: None,
+            duplicate_of_line_number: None,
+            is_draft: false,
+            is_valid: true,
+            line_number: Some(line_number),
+            fx_rate: None,
+            subtype: None,
+            // The review step (check_activities_import) resolves existing
+            // assets and sends the import back with asset_id set.
+            asset_id: if symbol.is_empty() {
+                None
+            } else {
+                Some(format!("{}-uuid", symbol.to_lowercase()))
+            },
+            isin: None,
+            force_import: false,
+            is_external: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_import_activities_seeds_broker_quotes_from_trade_prices() {
+        let account_service = Arc::new(MockAccountService::new());
+        let asset_service = Arc::new(MockAssetService::new());
+        let fx_service = Arc::new(MockFxService::new());
+        let activity_repository = Arc::new(MockActivityRepository::new());
+        let quote_store = Arc::new(MockImportQuoteStore::new());
+
+        account_service.add_account(create_test_account("acc-ars", "ARS"));
+        asset_service.add_asset(create_test_asset_with_instrument(
+            "ypfd-uuid",
+            "YPFD",
+            Some("XBUE"),
+            Some(InstrumentType::Equity),
+            "ARS",
+        ));
+
+        let quote_service = Arc::new(MockQuoteService);
+        let activity_service = ActivityService::new(
+            activity_repository,
+            account_service,
+            asset_service,
+            fx_service,
+            quote_service,
+        )
+        .with_quote_store(quote_store.clone());
+
+        let result = activity_service
+            .import_activities(vec![
+                balanz_like_import(
+                    "2025-05-06",
+                    "DEPOSIT",
+                    "",
+                    None,
+                    None,
+                    Some(dec!(1500000)),
+                    1,
+                ),
+                balanz_like_import(
+                    "2025-05-06",
+                    "BUY",
+                    "YPFD",
+                    Some(dec!(12)),
+                    Some(dec!(36000)),
+                    Some(dec!(432000)),
+                    2,
+                ),
+            ])
+            .await
+            .expect("import should succeed");
+
+        assert!(result.summary.success);
+        assert_eq!(result.summary.imported, 2);
+
+        // Only the BUY seeds a quote; the DEPOSIT must not.
+        let quotes = quote_store.get_all();
+        assert_eq!(quotes.len(), 1, "expected one seeded quote, got {quotes:?}");
+        let quote = &quotes[0];
+        assert_eq!(quote.close, dec!(36000));
+        assert_eq!(quote.open, dec!(36000));
+        assert_eq!(quote.currency, "ARS");
+        assert_eq!(quote.data_source, "BROKER");
+        assert_eq!(quote.timestamp.date_naive().to_string(), "2025-05-06");
+        assert!(
+            quote.id.ends_with("_2025-05-06_BROKER"),
+            "unexpected quote id {}",
+            quote.id
+        );
+    }
+
+    #[tokio::test]
+    async fn test_import_activities_dedups_seeded_quotes_per_asset_and_day() {
+        let account_service = Arc::new(MockAccountService::new());
+        let asset_service = Arc::new(MockAssetService::new());
+        let fx_service = Arc::new(MockFxService::new());
+        let activity_repository = Arc::new(MockActivityRepository::new());
+        let quote_store = Arc::new(MockImportQuoteStore::new());
+
+        account_service.add_account(create_test_account("acc-ars", "ARS"));
+        asset_service.add_asset(create_test_asset_with_instrument(
+            "ggal-uuid",
+            "GGAL",
+            Some("XBUE"),
+            Some(InstrumentType::Equity),
+            "ARS",
+        ));
+
+        let quote_service = Arc::new(MockQuoteService);
+        let activity_service = ActivityService::new(
+            activity_repository,
+            account_service,
+            asset_service,
+            fx_service,
+            quote_service,
+        )
+        .with_quote_store(quote_store.clone());
+
+        let result = activity_service
+            .import_activities(vec![
+                balanz_like_import(
+                    "2025-06-02",
+                    "BUY",
+                    "GGAL",
+                    Some(dec!(40)),
+                    Some(dec!(6800)),
+                    Some(dec!(272000)),
+                    1,
+                ),
+                balanz_like_import(
+                    "2025-06-02",
+                    "BUY",
+                    "GGAL",
+                    Some(dec!(39)),
+                    Some(dec!(6820)),
+                    Some(dec!(265980)),
+                    2,
+                ),
+            ])
+            .await
+            .expect("import should succeed");
+
+        assert!(result.summary.success);
+        assert_eq!(result.summary.imported, 2);
+
+        // Same asset + same day: a single quote row (last write wins).
+        let quotes = quote_store.get_all();
+        assert_eq!(
+            quotes.len(),
+            1,
+            "expected deduped quote per asset+day, got {quotes:?}"
+        );
+        assert_eq!(quotes[0].data_source, "BROKER");
     }
 }
